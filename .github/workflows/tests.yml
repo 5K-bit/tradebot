@@ -1,8 +1,10 @@
 name: tests
 
+# Push covers the default branch; pull_request covers everything else. Running
+# both on every branch would double each PR's CI for no extra signal.
 on:
   push:
-    branches: ["**"]
+    branches: [master]
   pull_request:
 
 jobs:
