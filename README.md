@@ -74,7 +74,7 @@ directly before walking away.
 
 ```bash
 pip install -r requirements-dev.txt
-python3 -m pytest tests/
+python3 -m pytest
 ```
 
 The suite runs anywhere — Linux, CI, a machine with no MT5 at all. It stubs
@@ -82,6 +82,10 @@ the `MetaTrader5` package with a fake terminal (`tests/fake_mt5.py`) that the
 real bot code drives unmodified, so you can change `strategy.py` and check
 the pipeline without pointing anything at a broker. The fake is installed
 unconditionally, so tests never reach a live terminal even on Windows.
+
+Warnings are configured as failures (`pytest.ini`). On a bot meant to run
+unattended for days against real money, a leaked file handle or a deprecation
+notice is worth hearing about while it is still cheap to fix.
 
 Coverage is aimed at the things that cost money rather than at a line-count
 target: that the strategy runs once per closed candle, that the bot only ever

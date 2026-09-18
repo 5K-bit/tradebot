@@ -10,7 +10,6 @@ opened, paying the spread twice, roughly every 30 seconds.
 import fake_mt5
 import strategy
 import trader
-from conftest import find_cross_bar
 
 
 def test_original_churn_reproduces_on_raw_candles(prices, cross_bar):

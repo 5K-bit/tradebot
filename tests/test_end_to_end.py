@@ -4,17 +4,14 @@ terminal outage, and checks what ends up in the vault log and state file.
 """
 import json
 
-import yaml
+import pytest
 
-import fake_mt5
 import trader
 from conftest import crossing_prices
 
 
 def run_main(tmp_path, monkeypatch, market, cycles=40, symbols=("EURUSD", "GBPUSD"),
              kill_terminal_at=8, revive_terminal_at=10, start_bar=64):
-    cfg = yaml.safe_load((tmp_path.parent / "config.yaml").read_text()) \
-        if (tmp_path.parent / "config.yaml").exists() else None
     cfg = {
         "symbols": list(symbols),
         "timeframe": "M15",
@@ -146,8 +143,6 @@ def test_state_file_is_not_rewritten_when_nothing_changes(tmp_path, monkeypatch,
 
 def test_main_validates_config_before_trading(tmp_path, monkeypatch, market):
     """A bad config must stop the bot at startup, not on the first live signal."""
-    import pytest
-
     cfg = {
         "symbols": ["EURUSD", "USDJPY"],          # USDJPY with no pip override
         "timeframe": "M15", "poll_seconds": 30,

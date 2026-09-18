@@ -2,6 +2,8 @@
 The vault log is the record of what the money actually did, so it must carry
 the real fill — not the quote the bot sized against.
 """
+from pathlib import Path
+
 import fake_mt5
 import trader
 
@@ -11,7 +13,7 @@ def open_a_trade(market, conn, risk, config, vault, prices, cross_bar):
     market.forming_price = prices[cross_bar - 1]
     trader.run_symbol("EURUSD", config, conn, risk, fake_mt5.TIMEFRAME_M15,
                       vault, {}, conn.account_info(), 0)
-    return open(vault).read()
+    return Path(vault).read_text()
 
 
 def test_logs_the_fill_not_the_quote(market, conn, risk, config, vault, prices, cross_bar):
@@ -57,5 +59,5 @@ def test_max_open_positions_is_logged_not_silent(market, conn, risk, config, vau
     market.forming_price = prices[cross_bar - 1]
     trader.run_symbol("EURUSD", config, conn, risk, fake_mt5.TIMEFRAME_M15,
                       vault, {}, conn.account_info(), 3)   # already at the cap
-    assert "max open positions reached" in open(vault).read()
+    assert "max open positions reached" in Path(vault).read_text()
     assert market.orders == []

@@ -6,6 +6,8 @@ manual trade blocked the bot's entries, counted toward max_open_positions, and
 got closed whenever the strategy said "close". The MAGIC tag was written on
 orders but never read back.
 """
+from pathlib import Path
+
 import pytest
 
 import fake_mt5
@@ -72,7 +74,7 @@ def test_bot_can_close_its_own_position(market, conn, risk, config, vault, price
                                    vault, {}, conn.account_info(), 1)
     assert not any(p.ticket == 555 for p in market.positions), "own position was not closed"
     assert open_count == 0
-    assert "CLOSED EURUSD ticket=555" in open(vault).read()
+    assert "CLOSED EURUSD ticket=555" in Path(vault).read_text()
 
 
 def test_manual_trade_does_not_block_entries(market, conn, risk, config, vault,
