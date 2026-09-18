@@ -70,6 +70,10 @@ def main():
                 continue
 
             all_positions = conn.open_positions()
+            # Tracked locally so it stays accurate as positions are opened
+            # within this same cycle, rather than reusing the stale snapshot
+            # from the top of the loop for every symbol.
+            open_count = len(all_positions)
 
             for symbol in cfg["symbols"]:
                 try:
@@ -84,10 +88,11 @@ def main():
                     if signal == "close" and in_position:
                         for pos in symbol_positions:
                             conn.close_position(pos)
+                            open_count -= 1
                             log_to_vault(vault_log, f"CLOSED {symbol} ticket={pos.ticket} profit={pos.profit}")
 
                     elif signal in ("buy", "sell") and not in_position:
-                        if not risk.can_open_new_position(len(all_positions)):
+                        if not risk.can_open_new_position(open_count):
                             log_to_vault(vault_log, f"Skipped {signal} {symbol}: max open positions reached")
                             continue
 
@@ -107,6 +112,7 @@ def main():
                         )
 
                         result = conn.market_order(symbol, lots, signal, sl_price=sl, tp_price=tp)
+                        open_count += 1
                         log_to_vault(
                             vault_log,
                             f"OPENED {signal.upper()} {symbol} lots={lots} entry={entry_price} sl={sl} tp={tp}"

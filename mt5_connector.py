@@ -49,10 +49,13 @@ class MT5Connector:
             raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
 
         acct = mt5.account_info()
+        # trade_mode: 0=DEMO, 1=CONTEST, 2=REAL (ACCOUNT_TRADE_MODE_* enum).
+        # Only REAL is "(LIVE)" — everything else is treated as non-live.
+        is_live = acct.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL
         print(
             f"[mt5] connected: login={acct.login} server={self.server} "
             f"balance={acct.balance} {acct.currency} "
-            f"{'(LIVE)' if not acct.trade_mode else '(DEMO)'}"
+            f"{'(LIVE)' if is_live else '(DEMO)'}"
         )
 
     def shutdown(self) -> None:
