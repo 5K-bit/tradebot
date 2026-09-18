@@ -1,0 +1,27 @@
+# config.yaml — Lathe forex trader configuration
+# Credentials are NOT here — they come from environment variables
+# (MT5_LOGIN, MT5_PASSWORD, MT5_SERVER). Never commit credentials.
+
+symbols:
+  - EURUSD
+  - GBPUSD
+
+timeframe: M15          # M1, M5, M15, M30, H1, H4, D1
+poll_seconds: 30        # how often to check for a new closed candle
+
+pip:
+  size: 0.0001          # 0.01 for JPY pairs
+  value_per_lot: 10     # approx USD value of 1 pip for 1 standard lot (varies by pair/account currency)
+
+stops:
+  stop_loss_pips: 20
+  take_profit_pips: 40
+
+risk:
+  risk_per_trade_pct: 0.01     # 1% of equity risked per trade
+  max_daily_loss_pct: 0.03     # kill switch: halt trading after -3% equity in a day
+  max_open_positions: 3
+  max_lot_size: 1.0
+
+vault:
+  log_path: "../vault/output/trades.md"   # trade log written here (adjust to your Obsidian vault path)
