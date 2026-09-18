@@ -1,0 +1,8 @@
+# Runtime state: kill-switch baseline, halt flag, candle cursor.
+# Never commit this — it is per-machine, per-account, and per-day.
+.lathe_state.json
+*.state.json
+
+__pycache__/
+*.py[cod]
+.venv/

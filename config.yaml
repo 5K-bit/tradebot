@@ -7,11 +7,20 @@ symbols:
   - GBPUSD
 
 timeframe: M15          # M1, M5, M15, M30, H1, H4, D1
-poll_seconds: 30        # how often to check for a new closed candle
+poll_seconds: 30        # how often to check whether a new candle has closed
 
 pip:
-  size: 0.0001          # 0.01 for JPY pairs
+  # Defaults, applied to any symbol without an override below.
+  size: 0.0001          # price move of one pip
   value_per_lot: 10     # approx USD value of 1 pip for 1 standard lot (varies by pair/account currency)
+
+  # Per-symbol overrides. JPY-quoted pairs use 0.01, not 0.0001 — the bot
+  # refuses to start if a JPY pair would silently inherit the default,
+  # because that mis-sizes every position on it by 100x.
+  overrides:
+    USDJPY:
+      size: 0.01
+      value_per_lot: 6.7    # ~USD per pip per lot; check against your account currency
 
 stops:
   stop_loss_pips: 20
@@ -20,8 +29,16 @@ stops:
 risk:
   risk_per_trade_pct: 0.01     # 1% of equity risked per trade
   max_daily_loss_pct: 0.03     # kill switch: halt trading after -3% equity in a day
-  max_open_positions: 3
+  max_open_positions: 3        # counts only positions THIS bot opened
   max_lot_size: 1.0
+  broker_utc_offset_hours: 0   # your broker's server timezone (e.g. 2 for UTC+2 /
+                               # EET winter, 3 for EEST summer). The daily loss
+                               # limit resets at the broker's midnight, not yours.
+
+state:
+  # Kill-switch baseline, halt flag, and last-processed candle per symbol.
+  # Deleting this file resets the daily loss limit — don't do it mid-day.
+  path: ".lathe_state.json"
 
 vault:
   log_path: "../vault/output/trades.md"   # trade log written here (adjust to your Obsidian vault path)

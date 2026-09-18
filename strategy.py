@@ -1,7 +1,8 @@
 """
 strategy.py — YOUR entry/exit logic goes here.
 
-generate_signal() is called once per new candle close, per symbol.
+generate_signal() is called once per new candle close, per symbol — not
+once per poll — and only ever sees COMPLETED candles.
 Return one of: "buy", "sell", "close", or None (do nothing).
 
 The placeholder below is a simple moving-average crossover so the pipeline
@@ -20,8 +21,11 @@ def _sma(closes: np.ndarray, period: int) -> float:
 def generate_signal(candles, in_position: bool) -> str | None:
     """
     candles: numpy structured array from MT5 (fields: time, open, high, low,
-             close, tick_volume, spread, real_volume), oldest first.
-    in_position: whether a position is currently open for this symbol.
+             close, tick_volume, spread, real_volume), oldest first. The
+             still-forming bar has already been stripped, so candles[-1] is
+             the most recently CLOSED candle and its values will not change.
+    in_position: whether a position opened by THIS bot is currently open for
+             this symbol (your own manual trades are not counted).
 
     Returns: "buy" | "sell" | "close" | None
     """
