@@ -1,0 +1,5 @@
+# Test dependencies. MetaTrader5 is deliberately absent: it is Windows-only
+# and the suite stubs it (see tests/fake_mt5.py), so tests run anywhere.
+numpy>=1.26
+PyYAML>=6.0
+pytest>=8.0

@@ -70,6 +70,25 @@ unless you intend to reset the daily loss limit.
 **Ctrl+C stops the loop but does not close open positions** — check MT5
 directly before walking away.
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest tests/
+```
+
+The suite runs anywhere — Linux, CI, a machine with no MT5 at all. It stubs
+the `MetaTrader5` package with a fake terminal (`tests/fake_mt5.py`) that the
+real bot code drives unmodified, so you can change `strategy.py` and check
+the pipeline without pointing anything at a broker. The fake is installed
+unconditionally, so tests never reach a live terminal even on Windows.
+
+Coverage is aimed at the things that cost money rather than at a line-count
+target: that the strategy runs once per closed candle, that the bot only ever
+closes positions it opened, that the kill switch survives a restart, that lot
+sizing cannot exceed the configured risk, and an end-to-end run of the main
+loop through a simulated terminal outage.
+
 ## What the bot will and won't touch
 
 Every order is tagged with a magic number (`MAGIC` in `mt5_connector.py`),
