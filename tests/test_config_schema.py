@@ -318,3 +318,11 @@ def test_validate_config_accepts_the_shipped_config():
     cfg = yaml.safe_load((Path(__file__).resolve().parent.parent / "config.yaml").read_text())
     norm = trader.validate_config(cfg)
     assert cs.effective_mode(norm) == cs.MODE_PAPER, "shipped config must default to PAPER"
+
+
+def test_breakout_precedence_is_wired():
+    """config.yaml documents this as flipping the check order — it must."""
+    assert cs.regime_config(grouped()).breakout_precedence == "after"
+    cfg = grouped()
+    cfg["regime"]["breakout"]["precedence"] = "before"
+    assert cs.regime_config(cfg).breakout_precedence == "before"

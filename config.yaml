@@ -129,6 +129,9 @@ regime:
     retest_distance_atr: 0.15       # REVIEW
 
   # Score band cut-offs. The document gives the bands, not the thresholds.
+  # NOTE: component max_points and classification bands below are fixed in
+  # scoring.py (25/20/20/15/10/10, and 60/80/90). They are recorded here as the
+  # contract; editing them does not change the engine.
   scoring:
     strong_adx: 25.0                     # REVIEW
     strong_separation_atr: 0.50          # REVIEW
@@ -429,6 +432,11 @@ position_management:
 # ------------------------------------------------------------
 # EXECUTION
 # ------------------------------------------------------------
+# NOT YET WIRED. These document intent; the engine does not read them.
+# Price and spread validation ARE enforced (see the spread filter and stop
+# validation), but max_slippage_points does not reach the order, and there is
+# no explicit duplicate-order check beyond the one-position cap and the
+# per-candle cursor.
 execution:
   require_price_validation: true
   require_spread_validation: true
@@ -469,6 +477,11 @@ state:
 # ------------------------------------------------------------
 broker:
   utc_offset_hours: 0             # REVIEW your MT5 server timezone
+
+  # NOT YET WIRED as explicit pre-flight checks. In practice symbol
+  # availability and volume limits are enforced implicitly — the engine
+  # selects each symbol before use and sizes against the broker's
+  # volume_min/step/max. Trade permissions are not checked at all.
   validate_symbol_availability: true
   validate_trade_permissions: true
   validate_volume_limits: true
@@ -512,6 +525,9 @@ safety:
   live_trading_requires_explicit_enable: true
   fail_closed: true
 
+  # BACKTEST currently behaves exactly like PAPER — decisions are made against
+  # live data and logged, with no orders sent. There is no historical replay
+  # engine, so it does not backtest anything.
   modes: [BACKTEST, PAPER, LIVE]
 
   halt_on:

@@ -230,6 +230,7 @@ def regime_config(cfg: dict):
         breakout_retest_bars=_first(cfg, ["regime.breakout.retest_max_bars"], 3),
         breakout_retest_atr=_first(cfg, ["regime.breakout.retest_distance_atr"], 0.15),
         breakout_requires_retest=bool(_first(cfg, ["regime.breakout.require_retest"], True)),
+        breakout_precedence=str(_first(cfg, ["regime.breakout.precedence"], "after")),
     )
 
 
