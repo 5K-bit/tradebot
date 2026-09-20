@@ -1,44 +1,680 @@
-# config.yaml — Lathe forex trader configuration
-# Credentials are NOT here — they come from environment variables
-# (MT5_LOGIN, MT5_PASSWORD, MT5_SERVER). Never commit credentials.
+ # ============================================================
+# LATHE — FOREX TRADING CONFIGURATION
+# Version: v1 Strategy Engine
+# ============================================================
+#
+# Credentials DO NOT belong in this file.
+#
+# Required environment variables:
+#   MT5_LOGIN
+#   MT5_PASSWORD
+#   MT5_SERVER
+#
+# Never commit credentials.
+#
+# Strategy:
+#   H1  = market regime / directional bias
+#   M15 = setup formation
+#   M5  = execution trigger
+#
+# Lathe does NOT allow AI/LLM-generated trade entries.
+# Trade decisions must come from deterministic strategy logic.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# MARKET
+# ------------------------------------------------------------
 
 symbols:
   - EURUSD
-  - GBPUSD
+  - USDJPY
 
-timeframe: M15          # M1, M5, M15, M30, H1, H4, D1
-poll_seconds: 30        # how often to check whether a new candle has closed
+
+timeframes:
+  regime: H1
+  setup: M15
+  trigger: M5
+
+
+poll_seconds: 15
+
+
+# ------------------------------------------------------------
+# TRADING SESSION
+# ------------------------------------------------------------
+
+session:
+  timezone: "America/New_York"
+
+  start: "22:00"
+  end: "06:00"
+
+  # Do not open new positions after the session closes.
+  allow_entries_after_session: false
+
+  # Existing positions may still be managed according to exit rules.
+  manage_existing_positions_after_session: true
+
+  max_trades_per_session: 3
+  max_open_positions: 1
+
+
+# ------------------------------------------------------------
+# PIP CONFIGURATION
+# ------------------------------------------------------------
 
 pip:
-  # Defaults, applied to any symbol without an override below.
-  size: 0.0001          # price move of one pip
-  value_per_lot: 10     # approx USD value of 1 pip for 1 standard lot (varies by pair/account currency)
+  default:
+    size: 0.0001
+    value_per_lot: 10.0
 
-  # Per-symbol overrides. JPY-quoted pairs use 0.01, not 0.0001 — the bot
-  # refuses to start if a JPY pair would silently inherit the default,
-  # because that mis-sizes every position on it by 100x.
   overrides:
+
     USDJPY:
       size: 0.01
-      value_per_lot: 6.7    # ~USD per pip per lot; check against your account currency
+      value_per_lot: 6.7
 
-stops:
-  stop_loss_pips: 20
-  take_profit_pips: 40
+
+# ------------------------------------------------------------
+# INDICATORS
+# ------------------------------------------------------------
+
+indicators:
+
+  ema:
+    fast: 20
+    slow: 50
+
+  atr:
+    period: 14
+
+  adx:
+    period: 14
+
+  rsi:
+    period: 14
+
+  swing:
+    lookback: 20
+
+
+# ------------------------------------------------------------
+# MARKET REGIME ENGINE
+# ------------------------------------------------------------
+
+regime:
+
+  enabled: true
+
+  allowed:
+    - TREND
+    - RANGE
+    - BREAKOUT
+    - NO_TRADE
+
+  timeframe: H1
+
+  trend:
+    use_ema_alignment: true
+    use_adx: true
+    minimum_adx: 20
+
+  range:
+    use_rsi: true
+    use_structure: true
+    require_defined_range: true
+
+  breakout:
+    require_structure_break: true
+    require_retest: true
+
+  # When market state cannot be confidently classified,
+  # Lathe must remain flat.
+  unknown_regime_action: NO_TRADE
+
+
+# ------------------------------------------------------------
+# STRATEGIES
+# ------------------------------------------------------------
+
+strategies:
+
+  trend_pullback:
+    enabled: true
+
+    allowed_regimes:
+      - TREND
+
+    bias_timeframe: H1
+    setup_timeframe: M15
+    trigger_timeframe: M5
+
+    require_ema_alignment: true
+    require_structure_alignment: true
+    require_pullback: true
+    require_trigger_confirmation: true
+
+    minimum_rr: 2.0
+
+
+  range_reversion:
+    enabled: true
+
+    allowed_regimes:
+      - RANGE
+
+    bias_timeframe: H1
+    setup_timeframe: M15
+    trigger_timeframe: M5
+
+    require_defined_range: true
+    require_range_edge_entry: true
+    prohibit_midrange_entry: true
+    require_trigger_confirmation: true
+
+    use_rsi_confirmation: true
+
+    minimum_rr: 1.5
+
+
+  breakout_retest:
+    enabled: true
+
+    allowed_regimes:
+      - BREAKOUT
+
+    bias_timeframe: H1
+    setup_timeframe: M15
+    trigger_timeframe: M5
+
+    require_structure_break: true
+    require_retest: true
+    require_trigger_confirmation: true
+
+    # Avoid entering directly into the breakout candle.
+    allow_chasing: false
+
+    minimum_rr: 2.0
+
+
+# ------------------------------------------------------------
+# ENTRY BUFFER
+# ------------------------------------------------------------
+
+entry:
+
+  # Trigger levels are offset slightly to reduce false touches.
+  atr_buffer:
+    enabled: true
+    timeframe: M5
+    multiplier: 0.05
+
+  require_closed_candle: true
+
+  allow_chasing: false
+
+
+# ------------------------------------------------------------
+# TRADE SCORE
+# ------------------------------------------------------------
+#
+# Maximum score = 100
+#
+# Lathe executes only when:
+#
+#   total score >= 80
+#   trigger score == 20
+#   hard gates pass
+#   RR requirement passes
+#   spread requirement passes
+#   risk engine approves
+#
+# ------------------------------------------------------------
+
+scoring:
+
+  enabled: true
+
+  maximum_score: 100
+
+  components:
+
+    regime:
+      max_points: 25
+
+    structure_location:
+      max_points: 20
+
+    trigger:
+      max_points: 20
+      required_points: 20
+
+    risk_reward:
+      max_points: 15
+
+    execution_quality:
+      max_points: 10
+
+    session_volatility:
+      max_points: 10
+
+
+  classifications:
+
+    hold:
+      minimum: 0
+      maximum: 59
+
+    watch:
+      minimum: 60
+      maximum: 79
+
+    valid:
+      minimum: 80
+      maximum: 89
+
+    strong:
+      minimum: 90
+      maximum: 100
+
+
+  execution_threshold: 80
+
+
+# ------------------------------------------------------------
+# HARD ENTRY GATES
+# ------------------------------------------------------------
+
+hard_gates:
+
+  require_market_data_healthy: true
+  require_broker_connection_healthy: true
+
+  require_session_open: true
+
+  require_no_existing_position: true
+
+  require_trade_count_below_limit: true
+
+  require_loss_limit_clear: true
+
+  require_drawdown_limit_clear: true
+
+  require_spread_filter_pass: true
+
+  require_news_filter_pass: true
+
+  require_rr_filter_pass: true
+
+  require_trigger_confirmation: true
+
+  # Failure of ANY hard gate prevents execution.
+  failure_action: REJECT
+
+
+# ------------------------------------------------------------
+# SPREAD FILTER
+# ------------------------------------------------------------
+
+spread:
+
+  enabled: true
+
+  # Current spread cannot exceed this multiple
+  # of the recent median spread.
+  max_median_multiplier: 1.5
+
+  median_window: 50
+
+  # Spread relative to current M5 ATR.
+  max_atr_ratio: 0.10
+
+  reject_abnormal_spread: true
+
+
+# ------------------------------------------------------------
+# NEWS FILTER
+# ------------------------------------------------------------
+
+news:
+
+  enabled: true
+
+  affected_currencies:
+    - USD
+    - EUR
+    - JPY
+
+  minimum_impact: HIGH
+
+  blackout_minutes_before: 30
+  blackout_minutes_after: 30
+
+  events:
+    - CENTRAL_BANK_RATE_DECISION
+    - CENTRAL_BANK_SPEECH
+    - CPI
+    - EMPLOYMENT
+    - NFP
+    - GDP
+    - FOMC
+    - ECB
+    - BOJ
+
+
+# ------------------------------------------------------------
+# RISK ENGINE
+# ------------------------------------------------------------
 
 risk:
-  risk_per_trade_pct: 0.01     # 1% of equity risked per trade
-  max_daily_loss_pct: 0.03     # kill switch: halt trading after -3% equity in a day
-  max_open_positions: 3        # counts only positions THIS bot opened
+
+  enabled: true
+
+  # User-selectable operating modes.
+  modes:
+
+    conservative:
+      risk_per_trade_pct: 0.005
+
+    normal:
+      risk_per_trade_pct: 0.01
+
+    aggressive:
+      risk_per_trade_pct: 0.02
+
+
+  default_mode: normal
+
+  # Hard maximum allowed by Lathe.
+  maximum_live_risk_pct: 0.02
+
+  max_open_positions: 1
+  max_trades_per_session: 3
+
   max_lot_size: 1.0
-  broker_utc_offset_hours: 0   # your broker's server timezone (e.g. 2 for UTC+2 /
-                               # EET winter, 3 for EEST summer). The daily loss
-                               # limit resets at the broker's midnight, not yours.
+
+  # Position size is calculated from:
+  #
+  # equity
+  # risk %
+  # stop distance
+  # pip value
+  #
+  dynamic_position_sizing: true
+
+  martingale: false
+  averaging_down: false
+
+
+# ------------------------------------------------------------
+# LOSS PROTECTION
+# ------------------------------------------------------------
+
+loss_protection:
+
+  enabled: true
+
+  # Stop trading after two consecutive losses.
+  consecutive_loss_limit: 2
+
+  stop_session_on_consecutive_loss_limit: true
+
+  # Soft session/daily protection.
+  max_session_drawdown_pct: 0.05
+
+  # Emergency account-level kill switch.
+  max_rolling_account_drawdown_pct: 0.10
+
+  require_manual_reactivation_after_kill_switch: true
+
+  cooldown_after_loss:
+    enabled: true
+
+    # Wait at least one completed M15 candle before another setup.
+    candles: 1
+    timeframe: M15
+
+
+# ------------------------------------------------------------
+# STOP LOSS
+# ------------------------------------------------------------
+
+stops:
+
+  mode: STRUCTURE_ATR
+
+  atr:
+    enabled: true
+    timeframe: M15
+    period: 14
+
+  structure:
+    enabled: true
+    use_recent_swing: true
+
+  # Stop may tighten, but must NEVER be widened after entry.
+  allow_stop_widening: false
+
+  minimum_stop_distance_pips: 3
+
+
+# ------------------------------------------------------------
+# TAKE PROFIT
+# ------------------------------------------------------------
+
+targets:
+
+  dynamic: true
+
+  trend:
+    minimum_rr: 2.0
+
+  breakout:
+    minimum_rr: 2.0
+
+  range:
+    minimum_rr: 1.5
+
+
+# ------------------------------------------------------------
+# POSITION MANAGEMENT
+# ------------------------------------------------------------
+
+position_management:
+
+  evaluate_at_r:
+    - 1.0
+    - 1.5
+
+  break_even:
+
+    enabled: true
+
+    # Do not instantly move stops to break-even.
+    minimum_r: 1.0
+
+    require_structure_confirmation: true
+
+
+  trailing_stop:
+
+    enabled: true
+
+    activation_r: 1.5
+
+    mode: STRUCTURE_ATR
+
+
+  partial_profit:
+
+    enabled: false
+
+    # Reserved for later optimization/backtesting.
+    activation_r: 1.0
+    close_fraction: 0.50
+
+
+# ------------------------------------------------------------
+# EXECUTION RULES
+# ------------------------------------------------------------
+
+execution:
+
+  order_type: MARKET
+
+  require_price_validation: true
+  require_spread_validation: true
+  require_slippage_validation: true
+
+  max_slippage_points: 20
+
+  retry_failed_order: false
+
+  duplicate_order_protection: true
+
+
+# ------------------------------------------------------------
+# DATA QUALITY
+# ------------------------------------------------------------
+
+data:
+
+  reject_stale_data: true
+
+  maximum_candle_age_seconds: 120
+
+  require_h1_data: true
+  require_m15_data: true
+  require_m5_data: true
+
+  minimum_history_bars: 250
+
+
+# ------------------------------------------------------------
+# STATE
+# ------------------------------------------------------------
 
 state:
-  # Kill-switch baseline, halt flag, and last-processed candle per symbol.
-  # Deleting this file resets the daily loss limit — don't do it mid-day.
+
   path: ".lathe_state.json"
 
-vault:
-  log_path: "../vault/output/trades.md"   # trade log written here (adjust to your Obsidian vault path)
+  persist:
+
+    - session_date
+    - session_start_equity
+    - trades_this_session
+    - consecutive_losses
+    - rolling_drawdown
+    - halt_flag
+    - kill_switch
+    - last_processed_candle
+    - open_trade_metadata
+
+  # State deletion must never be treated as a normal reset.
+  reject_missing_state_during_active_session: true
+
+
+# ------------------------------------------------------------
+# BROKER
+# ------------------------------------------------------------
+
+broker:
+
+  # Configure this to match the MT5 broker.
+  utc_offset_hours: 0
+
+  validate_symbol_availability: true
+
+  validate_trade_permissions: true
+
+  validate_volume_limits: true
+
+
+# ------------------------------------------------------------
+# LOGGING
+# ------------------------------------------------------------
+
+logging:
+
+  level: INFO
+
+  trade_log:
+    enabled: true
+    path: "../vault/output/trades.md"
+
+  decision_log:
+    enabled: true
+    path: "../vault/output/lathe_decisions.jsonl"
+
+  rejection_log:
+    enabled: true
+    path: "../vault/output/lathe_rejections.jsonl"
+
+  record_score_breakdown: true
+  record_regime: true
+  record_spread: true
+  record_atr: true
+  record_rr: true
+  record_risk_calculation: true
+
+
+# ------------------------------------------------------------
+# SAFETY
+# ------------------------------------------------------------
+
+safety:
+
+  live_trading_requires_explicit_enable: true
+
+  default_mode: PAPER
+
+  modes:
+    - BACKTEST
+    - PAPER
+    - LIVE
+
+  fail_closed: true
+
+  halt_on:
+
+    - broker_disconnect
+    - stale_market_data
+    - invalid_position_size
+    - missing_stop_loss
+    - invalid_stop_loss
+    - drawdown_limit
+    - corrupted_state
+    - strategy_exception
+
+
+# ============================================================
+# LATHE EXECUTION CONTRACT
+# ============================================================
+#
+# A trade may execute ONLY when:
+#
+# 1. Time is between 22:00–06:00 America/New_York.
+# 2. Symbol is EURUSD or USDJPY.
+# 3. H1 regime has been identified.
+# 4. An approved strategy matches that regime.
+# 5. M15 setup is valid.
+# 6. M5 trigger is confirmed on a CLOSED candle.
+# 7. Trigger component scores 20/20.
+# 8. Total setup score is >= 80/100.
+# 9. Required RR is satisfied.
+# 10. Spread filter passes.
+# 11. News blackout is clear.
+# 12. No Lathe position is already open.
+# 13. Fewer than 3 trades have occurred this session.
+# 14. Fewer than 2 consecutive losses have occurred.
+# 15. Session drawdown is below 5%.
+# 16. Rolling account drawdown is below 10%.
+# 17. Position size passes the risk engine.
+# 18. Broker/data health checks pass.
+#
+# If ANY mandatory condition fails:
+#
+#                         DO NOT TRADE
+#
+# ============================================================
