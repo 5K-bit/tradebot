@@ -9,29 +9,25 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import scoring
-import setups
+import scenarios as S
+
 import trader
-from conftest import IN_SESSION_UTC, feed_all_timeframes, trending_prices
-from setups import SetupCandidate
+from conftest import IN_SESSION_UTC, feed_candles
 
 START = datetime.fromisoformat(IN_SESSION_UTC)
 
 
-def install_setup(monkeypatch, score=90.0):
-    def detector(m15, m5, regime, cfg):
-        px = float(m15["close"][-1])
-        return SetupCandidate(setups.TREND_PULLBACK, "buy", px, px - 0.0020,
-                              px + 0.0050, px - 0.0020, "synthetic"), "ok"
-    monkeypatch.setitem(setups._DETECTORS, setups.TREND_PULLBACK, detector)
-    monkeypatch.setattr(scoring, "score", lambda c, r, ctx: (score, "synthetic"))
+def install_setup(monkeypatch, score=None):
+    """The real detectors are live now — nothing to install."""
+    return None
 
 
 def run_main(config, monkeypatch, market, cycles=12, clock_start=START,
              minutes_per_cycle=20, on_cycle=None):
     """Run main() for N cycles, advancing a fake clock, then Ctrl+C out."""
     monkeypatch.setattr(trader, "load_config", lambda path="config.yaml": config)
-    feed_all_timeframes(market, trending_prices())
+    feed_candles(market, h1=S.h1_uptrend(), m15=S.m15_pullback_to_ema(),
+                 m5=S.m5_full_long_trigger())
 
     n = {"c": 0}
     clock = {"now": clock_start}
@@ -63,14 +59,12 @@ def run_main(config, monkeypatch, market, cycles=12, clock_start=START,
     }
 
 
-def test_runs_clean_as_shipped_and_takes_no_trades(config, monkeypatch, market):
-    """Delivered state: the loop runs, and cannot open anything."""
+def test_runs_clean(config, monkeypatch, market):
     out = run_main(config, monkeypatch, market)
     assert out["cycles"] == 12
-    assert "NO SETUPS ARE CONFIGURED" in out["log"]
+    assert "Setups enabled" in out["log"]
     assert "ERROR" not in out["log"]
     assert "CYCLE ERROR" not in out["log"]
-    assert market.orders == []
 
 
 def test_logs_session_open_and_close(config, monkeypatch, market):
@@ -79,13 +73,13 @@ def test_logs_session_open_and_close(config, monkeypatch, market):
     assert "Session CLOSED" in out["log"]
 
 
-def test_opens_and_manages_a_trade(config, monkeypatch, market):
-    install_setup(monkeypatch)
+def test_places_a_pending_entry_and_logs_a_signal(config, monkeypatch, market):
     out = run_main(config, monkeypatch, market, cycles=6, minutes_per_cycle=16)
-    assert "OPENED EURUSD" in out["log"]
-    opens = [o for o in market.orders if o.get("action") == 1 and "position" not in o]
-    assert len(opens) >= 1
-    assert market.orders[0]["magic"] == 20260917
+    pending = [o for o in market.orders if o.get("action") == 5]
+    assert pending, out["log"]
+    assert pending[0]["magic"] == 20260917
+    assert "SIGNAL {" in out["log"]
+    assert "BUY EURUSD" in out["log"]
 
 
 def test_survives_a_terminal_outage(config, monkeypatch, market):
@@ -101,7 +95,6 @@ def test_survives_a_terminal_outage(config, monkeypatch, market):
 
 
 def test_daily_stop_halts_trading(config, monkeypatch, market):
-    install_setup(monkeypatch)
 
     def crash(cycle, m):
         if cycle == 2:
@@ -111,7 +104,6 @@ def test_daily_stop_halts_trading(config, monkeypatch, market):
 
 
 def test_account_drawdown_kill_switch_trips(config, monkeypatch, market):
-    install_setup(monkeypatch)
 
     def crash(cycle, m):
         if cycle == 2:
@@ -122,7 +114,6 @@ def test_account_drawdown_kill_switch_trips(config, monkeypatch, market):
 
 
 def test_state_carries_the_session_and_bar_cursors(config, monkeypatch, market):
-    install_setup(monkeypatch)
     out = run_main(config, monkeypatch, market, cycles=6, minutes_per_cycle=16)
     assert "last_bar_time" in out["state"]
     assert out["state"]["equity_peak"] == 10_000.0

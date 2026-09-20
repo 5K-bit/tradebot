@@ -39,9 +39,18 @@ def _parse_iso(text) -> datetime:
     return datetime.fromisoformat(raw)
 
 
+# How many spread samples to take before writing the window to disk.
+SPREAD_SAVE_EVERY = 10
+
+
 @dataclass
 class ProtectionConfig:
     max_spread_pips: float = 2.0
+    spread_median_multiple: float = 1.5   # SPEC spread <= 1.5x recent median
+    spread_atr_max: float = 0.10          # SPEC spread / ATR_M5 <= 0.10
+    spread_history: int = 50              # REVIEW bars of spread history kept
+    stop_min_spread_multiple: float = 2.0 # SPEC stop >= 2x current spread
+    stop_max_atr_multiple: float = 1.5    # SPEC stop <= 1.5x ATR_M15
     consecutive_loss_limit: int = 2
     cooldown_scope: str = "session"      # "session" = sit out the rest of it
     cooldown_minutes: int = 0            # used when cooldown_scope == "minutes"
@@ -78,6 +87,8 @@ class Protection:
         self._cooldown_until = self._get("cooldown_until", None)
         self._session_trades = dict(self._get("session_trades", {}) or {})
         self._equity_peak = self._get("equity_peak", None)
+        self._spreads = list(self._get("spread_history", []) or [])
+        self._spreads_since_save = 0
         self._account_halted = bool(self._get("account_halted", False))
 
         if self._account_halted:
@@ -98,7 +109,76 @@ class Protection:
             session_trades=self._session_trades,
             equity_peak=self._equity_peak,
             account_halted=self._account_halted,
+            spread_history=self._spreads[-self.cfg.spread_history:],
         )
+
+    # --- spread and stop validation ----------------------------------------
+    def observe_spread(self, spread: float) -> None:
+        """
+        Feed the rolling window the spread filter and score are measured against.
+
+        Persisted periodically rather than on every sample: a restart that lost
+        the whole window would leave the bot with no median, which silently
+        disables the "spread <= 1.5x median" rule exactly when it reconnects.
+        Writing every tick instead would fsync on every poll for no benefit —
+        a median over 50 samples does not care about the last few.
+        """
+        if spread is None or spread != spread or spread < 0:
+            return
+        self._spreads.append(float(spread))
+        if len(self._spreads) > self.cfg.spread_history * 2:
+            self._spreads = self._spreads[-self.cfg.spread_history:]
+
+        self._spreads_since_save += 1
+        if self._spreads_since_save >= SPREAD_SAVE_EVERY:
+            self._spreads_since_save = 0
+            self._persist()
+
+    def median_spread(self) -> float:
+        window = self._spreads[-self.cfg.spread_history:]
+        if not window:
+            return float("nan")
+        ordered = sorted(window)
+        mid = len(ordered) // 2
+        if len(ordered) % 2:
+            return ordered[mid]
+        return (ordered[mid - 1] + ordered[mid]) / 2
+
+    def check_spread(self, spread: float, atr_m5: float) -> Decision:
+        """
+        SPEC: spread <= 1.5 * recent median AND spread / ATR_M5 <= 0.10.
+        Both must hold; either failing is a HOLD.
+        """
+        if spread is None or spread != spread:
+            return Decision(False, "spread unavailable — invalid tick data")
+
+        median = self.median_spread()
+        if median == median and median > 0:
+            limit = self.cfg.spread_median_multiple * median
+            if spread > limit:
+                return Decision(False, f"spread {spread:.5f} above {self.cfg.spread_median_multiple}x "
+                                       f"median {median:.5f} ({limit:.5f})")
+        if atr_m5 == atr_m5 and atr_m5 > 0:
+            ratio = spread / atr_m5
+            if ratio > self.cfg.spread_atr_max:
+                return Decision(False, f"spread is {ratio:.3f} of ATR_M5, above the "
+                                       f"{self.cfg.spread_atr_max} limit")
+        return ALLOW
+
+    def check_stop(self, stop_distance: float, spread: float, atr_m15: float) -> Decision:
+        """SPEC: stop >= 2 * current spread AND stop <= 1.5 * ATR_M15."""
+        if stop_distance is None or stop_distance != stop_distance or stop_distance <= 0:
+            return Decision(False, "stop distance is not a positive number")
+        floor_ = self.cfg.stop_min_spread_multiple * spread
+        if stop_distance < floor_:
+            return Decision(False, f"stop {stop_distance:.5f} is under "
+                                   f"{self.cfg.stop_min_spread_multiple}x the spread ({floor_:.5f})")
+        if atr_m15 == atr_m15 and atr_m15 > 0:
+            ceiling = self.cfg.stop_max_atr_multiple * atr_m15
+            if stop_distance > ceiling:
+                return Decision(False, f"stop {stop_distance:.5f} is over "
+                                       f"{self.cfg.stop_max_atr_multiple}x ATR_M15 ({ceiling:.5f})")
+        return ALLOW
 
     # --- events ------------------------------------------------------------
     def observe_equity(self, equity: float) -> None:
@@ -230,6 +310,11 @@ def from_config(cfg: dict) -> ProtectionConfig:
     r = (cfg.get("risk") or {})
     return ProtectionConfig(
         max_spread_pips=p.get("max_spread_pips", 2.0),
+        spread_median_multiple=p.get("spread_median_multiple", 1.5),
+        spread_atr_max=p.get("spread_atr_max", 0.10),
+        spread_history=p.get("spread_history", 50),
+        stop_min_spread_multiple=p.get("stop_min_spread_multiple", 2.0),
+        stop_max_atr_multiple=p.get("stop_max_atr_multiple", 1.5),
         consecutive_loss_limit=p.get("consecutive_loss_limit", 2),
         cooldown_scope=p.get("cooldown_scope", "session"),
         cooldown_minutes=p.get("cooldown_minutes", 0),

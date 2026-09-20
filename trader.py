@@ -22,6 +22,7 @@ refuse rather than guess. Everything around them is live and tested.
 Run with:  python3 trader.py
 Stop with: Ctrl+C (does NOT auto-close open positions — see README)
 """
+import json
 import math
 import time
 import traceback
@@ -31,6 +32,7 @@ from pathlib import Path
 import MetaTrader5 as mt5
 import yaml
 
+import indicators
 import protection as protection_mod
 import regime as regime_mod
 import scoring
@@ -57,6 +59,9 @@ DEFAULT_REGIME_MAP = {
     regime_mod.TREND_DOWN: (setups.TREND_PULLBACK, setups.BREAKOUT_RETEST),
     regime_mod.RANGE: (setups.RANGE_REVERSION,),
 }
+
+# How many M5 bars of history the indicators need before anything is decided.
+CANDLE_COUNT = 400
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -170,12 +175,16 @@ class Lathe:
         self.tf_setup = TIMEFRAME_MAP[tfs["setup"]]
         self.tf_entry = TIMEFRAME_MAP[tfs["entry"]]
 
+        self.setup_cfg = setups.from_config(cfg)
         self.enabled_setups = (cfg.get("setups") or {}).get("enabled") or []
         self.regime_map = (cfg.get("setups") or {}).get("regime_map") or DEFAULT_REGIME_MAP
         self.min_score = (cfg.get("scoring") or {}).get("min_score", scoring.MIN_SCORE)
 
         self.bar_cursor = {str(k): int(v) for k, v in (state.get("last_bar_time") or {}).items()}
         self.trade_meta = dict(state.get("trade_meta") or {})   # ticket -> entry/stop
+        self._atr_history: dict = {}
+        self.entry_bar_seconds = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+                                  "H1": 3600, "H4": 14400, "D1": 86400}[tfs["entry"]]
 
     # --- open position management -----------------------------------------
     def manage_open_positions(self, now: datetime) -> None:
@@ -229,72 +238,110 @@ class Lathe:
         return float(sum(getattr(d, "profit", 0.0) for d in deals))
 
     # --- per-symbol evaluation --------------------------------------------
+    def expire_stale_orders(self, now: datetime) -> None:
+        """Cancel entry orders whose window has passed (SPEC: 3 M5 candles)."""
+        for order in self.conn.pending_orders():
+            expires = getattr(order, "expiration", 0)
+            if expires and now.timestamp() > float(expires):
+                try:
+                    self.conn.cancel_order(order)
+                    log_decision(self.vault, order.symbol, "ORDER-EXPIRED",
+                                 "entry not triggered within the window",
+                                 ticket=order.ticket)
+                except RuntimeError as e:
+                    log_decision(self.vault, order.symbol, "CANCEL-FAILED", str(e))
+
     def evaluate(self, symbol: str, session_key: str, account, now: datetime) -> None:
-        setup_candles = self.conn.get_candles(symbol, self.tf_setup, count=300)
-        if len(setup_candles) < 2:
+        m15_all = self.conn.get_candles(symbol, self.tf_setup, count=CANDLE_COUNT)
+        if len(m15_all) < 2:
             return
-        closed_setup = setup_candles[:-1]
-        bar_time = int(closed_setup["time"][-1])
+        m15 = m15_all[:-1]
+        bar_time = int(m15["time"][-1])
         if self.bar_cursor.get(symbol) == bar_time:
-            return                      # already decided on this setup bar
+            return
         self.bar_cursor[symbol] = bar_time
 
         pip_size, pip_value_per_lot = resolve_pip(self.cfg, symbol)
         tick = self.conn.symbol_tick(symbol)
-        spread_pips = (tick.ask - tick.bid) / pip_size
+        spread = float(tick.ask - tick.bid)
+        self.protection.observe_spread(spread)
 
         gate = self.protection.check(
             session_key=session_key,
-            open_positions=len(self.conn.open_positions()),
-            spread_pips=spread_pips,
+            open_positions=len(self.conn.open_positions()) + len(self.conn.pending_orders()),
+            spread_pips=spread / pip_size,
             last_candle_time=bar_time,
             now=now,
             connected=True,
         )
         if not gate:
-            log_decision(self.vault, symbol, "NO-TRADE", gate.reason, spread=round(spread_pips, 2))
+            log_decision(self.vault, symbol, "HOLD", gate.reason)
             return
 
-        h1 = self.conn.get_candles(symbol, self.tf_regime, count=300)
-        current_regime = regime_mod.classify(h1[:-1], self.regime_cfg)
-        if current_regime.state == regime_mod.UNDEFINED:
-            log_decision(self.vault, symbol, "NO-TRADE", current_regime.reason)
+        h1_all = self.conn.get_candles(symbol, self.tf_regime, count=CANDLE_COUNT)
+        current = regime_mod.classify(h1_all[:-1], self.regime_cfg)
+        if not current.is_clear:
+            log_decision(self.vault, symbol, "HOLD", current.reason)
             return
 
-        eligible = [s for s in self.regime_map.get(current_regime.state, ())
-                    if s in self.enabled_setups]
+        m5_all = self.conn.get_candles(symbol, self.tf_entry, count=CANDLE_COUNT)
+        m5 = m5_all[:-1]
+        atr_m15 = float(indicators.atr(m15, self.regime_cfg.atr_period)[-1])
+        atr_m5 = float(indicators.atr(m5, self.regime_cfg.atr_period)[-1])
+
+        spread_ok = self.protection.check_spread(spread, atr_m5)
+
+        eligible = [n for n in self.regime_map.get(current.state, ())
+                    if n in self.enabled_setups]
         if not eligible:
-            log_decision(self.vault, symbol, "NO-TRADE",
-                         f"no enabled setup for regime {current_regime.state}")
+            log_decision(self.vault, symbol, "HOLD",
+                         f"no enabled setup for regime {current.state}")
             return
 
-        entry_candles = self.conn.get_candles(symbol, self.tf_entry, count=300)
-        reasons = []
+        misses = []
         for name in eligible:
-            candidate, reason = setups.detect(name, closed_setup, entry_candles[:-1],
-                                              current_regime, self.cfg)
+            candidate, why = setups.detect(name, m15, m5, current, self.setup_cfg)
             if candidate is None:
-                reasons.append(f"{name}: {reason}")
+                misses.append(f"{name}: {why}")
                 continue
-            self._consider(symbol, candidate, current_regime, session_key,
-                           account, pip_size, pip_value_per_lot)
+            self._consider(symbol, candidate, current, session_key, account,
+                           pip_size, pip_value_per_lot, spread, spread_ok,
+                           atr_m5, atr_m15, now)
             return
-        log_decision(self.vault, symbol, "NO-TRADE", "; ".join(reasons),
-                     regime=current_regime.state, adx=round(current_regime.adx, 1))
+        log_decision(self.vault, symbol, "HOLD", "; ".join(misses),
+                     regime=current.state, adx=round(current.adx, 1))
 
-    def _consider(self, symbol, candidate, current_regime, session_key,
-                  account, pip_size, pip_value_per_lot) -> None:
-        if not candidate.meets_min_rr():
-            log_decision(self.vault, symbol, "REJECTED",
-                         f"RR {candidate.rr:.2f} below minimum "
-                         f"{setups.MIN_RR[candidate.setup]} for {candidate.setup}")
-            return
+    def _consider(self, symbol, candidate, current, session_key, account,
+                  pip_size, pip_value_per_lot, spread, spread_ok,
+                  atr_m5, atr_m15, now) -> None:
+        regime_points, regime_reason = regime_mod.regime_score(current, self.regime_cfg)
 
-        value, why = scoring.score(candidate, current_regime, {"symbol": symbol})
-        if not scoring.passes(value, self.min_score):
-            shown = "n/a" if value is None else f"{value:.0f}"
-            log_decision(self.vault, symbol, "REJECTED",
-                         f"signal score {shown} < {self.min_score}: {why}")
+        breakdown = scoring.build(
+            regime_points=regime_points, regime_reason=regime_reason,
+            candidate=candidate, setup_class=candidate.setup_class,
+            spread=spread,
+            median_spread=self.protection.median_spread(),
+            max_spread=self.protection.cfg.max_spread_pips * pip_size,
+            atr_m5=atr_m5, median_atr_m5=self.median_atr(symbol, atr_m5),
+            news_clear=True, data_healthy=True,
+            min_score=self.min_score,
+        )
+        if not spread_ok:
+            breakdown.execution = 0
+            breakdown.blockers.append(spread_ok.reason)
+
+        stop_ok = self.protection.check_stop(candidate.risk_distance, spread, atr_m15)
+        if not stop_ok:
+            breakdown.blockers.append(stop_ok.reason)
+
+        signal = scoring.signal_object(symbol, candidate, current.state,
+                                       breakdown, self.risk.config.risk_per_trade_pct)
+
+        if not breakdown.executable:
+            log_decision(self.vault, symbol, "HOLD",
+                         "; ".join(breakdown.blockers) or "score below threshold",
+                         setup=candidate.setup, score=breakdown.total,
+                         classification=breakdown.classification)
             return
 
         limits = self.conn.symbol_limits(symbol)
@@ -308,28 +355,47 @@ class Lathe:
             volume_step=limits.volume_step,
             volume_max=limits.volume_max,
         )
-        result = self.conn.market_order(symbol, lots, candidate.direction,
-                                        sl_price=candidate.stop_price,
-                                        tp_price=candidate.target_price)
+        expires_at = int(now.timestamp() + candidate.expiry_bars * self.entry_bar_seconds)
+        result = self.conn.pending_stop_order(
+            symbol, lots, candidate.direction, candidate.entry_price,
+            candidate.stop_price, candidate.target_price, expires_at=expires_at)
+
         self.trade_meta[str(result.order)] = {
             "symbol": symbol,
-            "entry": result.price,
+            "entry": candidate.entry_price,
             "original_stop": candidate.stop_price,
             "session_key": session_key,
+            "setup": candidate.setup,
         }
         self.state.set(trade_meta=self.trade_meta)
         self.protection.record_trade_opened(session_key)
+
+        signal["ticket"] = result.order
+        signal["lots"] = lots
+        log_to_vault(self.vault, f"SIGNAL {json.dumps(signal, default=str)}")
         log_decision(
-            self.vault, symbol, "OPENED",
-            f"{candidate.setup} in {current_regime.state} (score {value:.0f})",
-            direction=candidate.direction.upper(), lots=result.volume,
-            fill=result.price, sl=candidate.stop_price, tp=candidate.target_price,
-            rr=round(candidate.rr, 2), risk_pct=self.risk.config.risk_per_trade_pct,
-            ticket=result.order,
+            self.vault, symbol, signal["signal"],
+            f"{candidate.setup} in {current.state} — {breakdown.classification}",
+            score=breakdown.total, lots=lots, entry=round(candidate.entry_price, 5),
+            sl=round(candidate.stop_price, 5), tp=round(candidate.target_price, 5),
+            rr=round(candidate.rr, 2), ticket=result.order,
         )
+
+    def median_atr(self, symbol: str, atr_now: float) -> float:
+        """Rolling median ATR per symbol, for the session/volatility score."""
+        history = self._atr_history.setdefault(symbol, [])
+        if atr_now == atr_now:
+            history.append(atr_now)
+            del history[:-50]
+        if not history:
+            return float("nan")
+        ordered = sorted(history)
+        mid = len(ordered) // 2
+        return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
 
 
 def main():
+
     cfg = load_config()
     validate_config(cfg)
 
@@ -343,11 +409,10 @@ def main():
     log_to_vault(bot.vault, f"Lathe started. Symbols={cfg['symbols']} "
                             f"session={bot.session.describe()} "
                             f"TFs={cfg['timeframes']}")
-    if not setups.any_configured():
-        msg = ("NO SETUPS ARE CONFIGURED — setups.py and scoring.py are stubs, so "
-               "no trade can be opened. Running in observation mode.")
-        print(f"[lathe] {msg}")
-        log_to_vault(bot.vault, msg)
+    enabled = ", ".join(bot.enabled_setups) or "none"
+    log_to_vault(bot.vault, f"Setups enabled: {enabled}. Score threshold "
+                            f"{bot.min_score}, trigger must score "
+                            f"{scoring.REQUIRED_TRIGGER_SCORE}.")
 
     was_open = None
     try:
@@ -367,6 +432,7 @@ def main():
                     was_open = session_key
 
                 bot.manage_open_positions(now)
+                bot.expire_stale_orders(now)
                 bot.reconcile_closed_trades(session_key)
 
                 if bot.risk.check_kill_switch(account.equity) or session_key is None:

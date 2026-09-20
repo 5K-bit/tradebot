@@ -214,6 +214,63 @@ class MT5Connector:
             raise RuntimeError(f"order_send failed: retcode={result.retcode} comment={result.comment}")
         return result
 
+    def pending_stop_order(self, symbol: str, volume: float, direction: str,
+                           entry_price: float, sl_price: float, tp_price: float,
+                           expires_at: int | None = None, comment: str = "lathe"):
+        """
+        Place a stop-entry order beyond the current price.
+
+        The strategy enters above the trigger candle's high (or below its low),
+        which is a BUY_STOP / SELL_STOP, not a market order — and it expires if
+        price does not reach it within the retest window.
+        """
+        limits = self.symbol_limits(symbol)
+        order_type = mt5.ORDER_TYPE_BUY_STOP if direction == "buy" else mt5.ORDER_TYPE_SELL_STOP
+
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": symbol,
+            "volume": volume,
+            "type": order_type,
+            "price": round(entry_price, limits.digits),
+            "sl": round(sl_price, limits.digits),
+            "tp": round(tp_price, limits.digits),
+            "magic": MAGIC,
+            "comment": comment,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        if expires_at:
+            request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+            request["expiration"] = int(expires_at)
+        else:
+            request["type_time"] = mt5.ORDER_TIME_GTC
+
+        result = mt5.order_send(request)
+        if result is None:
+            raise RuntimeError(f"pending_stop_order({symbol}) returned None: {mt5.last_error()}")
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(f"pending order failed: retcode={result.retcode} "
+                               f"comment={result.comment}")
+        return result
+
+    def pending_orders(self, symbol: str | None = None, magic: int | None = MAGIC):
+        """Working orders placed by this bot."""
+        orders = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
+        orders = list(orders) if orders is not None else []
+        if magic is not None:
+            orders = [o for o in orders if getattr(o, "magic", None) == magic]
+        return orders
+
+    def cancel_order(self, order):
+        """Remove a working order — used when its entry window expires."""
+        if getattr(order, "magic", None) != MAGIC:
+            raise RuntimeError(f"refusing to cancel order {order.ticket}: not this bot's")
+        result = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": order.ticket})
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            code = getattr(result, "retcode", "None")
+            raise RuntimeError(f"cancel_order failed: retcode={code}")
+        return result
+
     def modify_stop(self, position, new_sl: float, new_tp: float | None = None):
         """
         Move an open position's stop-loss (and optionally its target).

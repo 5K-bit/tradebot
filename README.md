@@ -1,22 +1,13 @@
 # Lathe — Forex Trader Module
 
-Implements LATHE ADAPTIVE SESSION STRATEGY v1 against a live MT5 account.
+Implements LATHE ADAPTIVE SESSION STRATEGY v1 — six setups, a six-category
+signal score, and a protection layer — against an MT5 account.
 
-> ### ⚠️ This bot cannot currently open a trade — by design
+> ### ⚠️ Not yet validated against a live broker
 >
-> The strategy document names three setups (Trend Pullback, Range Reversion,
-> Breakout + Retest) and requires a signal score of 80 or more, but defines
-> neither the setup rules nor the score formula. `setups.py` and `scoring.py`
-> therefore ship **fail-closed**: they refuse and record why, rather than
-> guessing at entry logic for an account with money in it.
->
-> Everything around them is built and tested: session gating, H1 regime
-> classification, the protection layer, risk sizing, RR validation, trade
-> management and decision logging. Fill in the two stubs — each lists exactly
-> what it needs in its docstring — and the bot goes live.
->
-> Until then it runs in observation mode, logging the decision it would have
-> made at every setup bar.
+> The strategy is fully implemented and tested, but every test runs against a
+> fake MT5 terminal. No order has ever reached a real broker. Demo account
+> first, and read the REVIEW markers in `config.yaml` before funding anything.
 
 ## Requirements
 
@@ -77,22 +68,51 @@ rejections, not only for fills.
 |---|---|
 | `sessions.py` | the 22:00–06:00 New York window, DST-aware, Fri/Sat excluded |
 | `regime.py` | H1 EMA20/EMA50 + ADX14 + ATR14 → trend / range / neither |
-| `setups.py` | the three entry patterns — **stubs, see above** |
-| `scoring.py` | the ≥80 signal score — **stub, see above** |
+| `setups.py` | the six entry patterns (A–F) |
+| `scoring.py` | the six-category signal score and its hard overrides |
 | `protection.py` | session, concurrency, trade count, cooldown, spread, news, data health, account drawdown |
 | `risk_manager.py` | position sizing and the daily loss stop |
 | `trade_management.py` | structural ATR stop, break-even at +1R, trailing from +1.5R, 2R target |
 | `indicators.py` | EMA, Wilder ATR and ADX, swing structure |
 
-### Filling in a setup
+### The setups
 
-Each detector takes the closed M15 candles, the closed M5 candles, the current
-`Regime`, and the config, and returns `(SetupCandidate, reason)` or
-`(None, reason)`. The candidate carries entry, stop, target and the structural
-level the stop is anchored to; RR is computed from those and checked against
-the strategy minimums (2.0 for trend and breakout, 1.5 for range) before
-anything is sized. See the docstrings in `setups.py` and `scoring.py` for the
-specific parameters each one needs.
+| | Setup | Regime | Trigger | Min RR |
+|---|---|---|---|---|
+| A | Trend Pullback long | bullish trend | higher low + 3-bar M5 high break | 2.0 |
+| B | Trend Pullback short | bearish trend | lower high + 3-bar M5 low break | 2.0 |
+| C | Range Reversion long | range | bottom 20%, RSI<35, rejection close | 1.5 |
+| D | Range Reversion short | range | top 20%, RSI>65, rejection close | 1.5 |
+| E | Breakout+Retest long | trend | 12-bar high broken, retested, M5 break | 2.0 |
+| F | Breakout+Retest short | trend | 12-bar low broken, retested, M5 break | 2.0 |
+
+Entries are **pending stop orders** placed beyond the trigger candle
+(`trigger_high + 0.05 × ATR_M5`), cancelled if price does not reach them within
+three M5 candles.
+
+### The signal score
+
+Six categories, **summed** to a maximum of 100:
+
+| Category | Max |
+|---|---|
+| Regime quality | 25 |
+| Setup location | 20 |
+| Entry trigger | 20 |
+| Reward / risk | 15 |
+| Execution quality | 10 |
+| Session / volatility | 10 |
+
+A trade needs **80 or more**, a trigger scoring **exactly 20**, a passing
+spread filter, RR at or above the setup minimum, and every hard gate green.
+The score never overrides a hard rule: a 90 with a failed spread filter is a
+HOLD, not a BUY.
+
+> The strategy document renders the formula with asterisks between the terms.
+> Those are mangled bullet points — the categories max at 100 only when added,
+> and both worked examples in the document confirm it
+> (25+20+20+15+0+10 = 90, and 25+20+20+12+10+8 = 95 matching its
+> `"score_total": 95`). Both are encoded as tests in `test_scoring.py`.
 
 ## Run
 
@@ -137,9 +157,12 @@ DST and the weekend closure, regime classification including the deliberate
 in the trade's favour, and an end-to-end run of the main loop through a
 terminal outage and both kill switches.
 
-The suite is mutation-tested: 31 safety rules were each broken in a scratch
-copy and the suite confirmed to fail for every one. That exercise is what
-caught the two tests that were passing for the wrong reason.
+The suite is mutation-tested: every strategy and safety rule is broken in turn
+in a scratch copy, and the suite must fail for each one. The current sweep is
+31/31 on the strategy rules. That exercise earns its keep — the first run found
+12 holes, including that nothing at all tested the spread and stop validators,
+and it surfaced a real bug where the spread median was never persisted, so a
+restart silently disabled the "≤ 1.5× median" rule.
 
 ## Protection
 
@@ -151,7 +174,8 @@ caught the two tests that were passing for the wrong reason.
 | Cooldown | 2 consecutive losses sit out the rest of the session |
 | Daily stop | 5% of equity, persists across restarts |
 | Account kill switch | 10% drawdown from the equity high-water mark — **sticky**, cleared only by hand |
-| Spread filter | configurable ceiling, checked per decision |
+| Spread filter | ≤ 1.5× rolling median AND ≤ 10% of ATR_M5, plus a pip ceiling |
+| Stop validation | ≥ 2× current spread AND ≤ 1.5× ATR_M15 |
 | Data health | stale candles, missing ticks and a dropped terminal all mean no trade |
 | News blackout | manual windows in config (see below) |
 

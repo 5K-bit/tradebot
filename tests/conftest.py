@@ -44,8 +44,10 @@ BASE_CONFIG = {
     "poll_seconds": 30,
     "session": {"timezone": "America/New_York", "start": "22:00", "end": "06:00"},
     "regime": {"ema_fast": 20, "ema_slow": 50, "adx_period": 14, "atr_period": 14,
-               "adx_trend_min": 25.0, "adx_range_max": 20.0},
+               "trend_adx_min": 20.0, "trend_separation_atr": 0.25,
+               "range_adx_max": 18.0, "range_separation_atr": 0.20},
     "setups": {"enabled": list(setups.ALL_SETUPS)},
+    "setup_params": {},
     "scoring": {"min_score": 80},
     "risk": {"risk_per_trade_pct": 0.01, "max_daily_loss_pct": 0.05,
              "account_drawdown_pct": 0.10, "max_concurrent_trades": 1,
@@ -54,7 +56,9 @@ BASE_CONFIG = {
     "management": {"atr_stop_multiple": 0.5, "breakeven_at_r": 1.0,
                    "breakeven_offset_r": 0.0, "trail_start_r": 1.5,
                    "trail_distance_r": 1.0, "target_r": 2.0},
-    "protection": {"max_spread_pips": 2.0, "consecutive_loss_limit": 2,
+    "protection": {"max_spread_pips": 20.0, "consecutive_loss_limit": 2,
+                   "spread_median_multiple": 1.5, "spread_atr_max": 0.10,
+                   "stop_min_spread_multiple": 2.0, "stop_max_atr_multiple": 1.5,
                    "cooldown_scope": "session", "cooldown_minutes": 0,
                    "max_candle_age_seconds": 1800,
                    "news_blackout_windows": [],
@@ -129,6 +133,56 @@ def feed_all_timeframes(market, prices, forming=None):
     # symbol_info_tick() prices off these, and the spread gate reads the tick.
     market.closed_prices = list(prices)
     market.forming_price = forming
+
+
+def feed_candles(market, h1=None, m15=None, m5=None, spread=None):
+    """
+    Drive each timeframe with its own OHLC scenario.
+
+    The fake stores closing prices per timeframe, so the OHLC arrays from
+    scenarios.py are installed directly and the tick price is taken from the
+    M5 series, which is what the spread gate and entry prices read.
+    """
+    import numpy as np
+    for tf, candles in ((H1, h1), (M15, m15), (M5, m5)):
+        if candles is None:
+            continue
+        # The pipeline drops the newest bar as still-forming, so append a
+        # neutral one. Without it the scenario's meaningful final bar — the
+        # trigger candle, the EMA touch — is the bar that gets thrown away.
+        market.ohlc[tf] = _with_forming_bar(candles)
+    if m5 is not None:
+        closes = [float(x) for x in np.asarray(m5["close"], dtype=float)]
+        market.closed_prices = closes
+        market.forming_price = closes[-1]
+        if spread is None:
+            # The spec caps spread at 10% of ATR_M5, so a fixed pip value would
+            # fail on any scenario with a small ATR. Derive a realistic one.
+            from indicators import atr as _atr
+            a = float(_atr(m5, 14)[-1])
+            spread = a * 0.05 if a == a and a > 0 else 0.00008
+    market.spread = spread if spread is not None else 0.00008
+
+
+def _with_forming_bar(candles):
+    """Append a doji at the last close, standing in for the in-progress bar."""
+    import numpy as np
+    out = np.zeros(len(candles) + 1, dtype=candles.dtype)
+    out[:-1] = candles
+    last = candles[-1]
+    step = int(candles[1]["time"] - candles[0]["time"]) if len(candles) > 1 else 900
+    close = float(last["close"])
+    out[-1] = (int(last["time"]) + step, close, close, close, close, 100, 10, 0)
+    return out
+
+
+@pytest.fixture
+def trending_setup(market):
+    """A market where the trend-pullback setup fires with a full trigger."""
+    import scenarios as S
+    feed_candles(market, h1=S.h1_uptrend(), m15=S.m15_pullback_to_ema(),
+                 m5=S.m5_full_long_trigger())
+    return market
 
 
 @pytest.fixture

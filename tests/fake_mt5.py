@@ -14,9 +14,13 @@ import numpy as np
 TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M15 = 1, 5, 15
 TIMEFRAME_M30, TIMEFRAME_H1, TIMEFRAME_H4, TIMEFRAME_D1 = 30, 16385, 16388, 16408
 ORDER_TYPE_BUY, ORDER_TYPE_SELL = 0, 1
+ORDER_TYPE_BUY_STOP, ORDER_TYPE_SELL_STOP = 4, 5
 TRADE_ACTION_DEAL = 1
 TRADE_ACTION_SLTP = 2
+TRADE_ACTION_PENDING = 5
+TRADE_ACTION_REMOVE = 8
 ORDER_TIME_GTC = 0
+ORDER_TIME_SPECIFIED = 2
 ORDER_FILLING_IOC = 1
 TRADE_RETCODE_DONE = 10009
 ACCOUNT_TRADE_MODE_DEMO, ACCOUNT_TRADE_MODE_CONTEST, ACCOUNT_TRADE_MODE_REAL = 0, 1, 2
@@ -71,7 +75,9 @@ class Market:
         # looks decades stale to the data-health gate.
         self.now_ts = 1768447800.0
         self.series = {}          # timeframe -> list of closed prices
+        self.ohlc = {}            # timeframe -> a full rates array
         self.deals = {}           # ticket -> realised profit
+        self.pending = []         # working orders
 
     def set_series(self, timeframe, prices, forming=None):
         """Give one timeframe its own candle series."""
@@ -146,6 +152,13 @@ def symbol_info_tick(symbol):
 
 
 def copy_rates_from_pos(symbol, timeframe, start_pos, count):
+    if timeframe in MARKET.ohlc:
+        arr = MARKET.ohlc[timeframe][-count:].copy()
+        # Re-anchor so the newest bar sits at now_ts, as a live terminal would.
+        if len(arr):
+            arr["time"] = (MARKET.now_ts
+                           - (len(arr) - 1 - np.arange(len(arr))) * BAR_SECONDS).astype("int64")
+        return arr
     if timeframe in MARKET.series:
         closed, forming = MARKET.series[timeframe]
     else:
@@ -168,6 +181,10 @@ def positions_get(symbol=None):
     return tuple(p for p in MARKET.positions if symbol is None or p.symbol == symbol)
 
 
+def orders_get(symbol=None, **kwargs):
+    return tuple(o for o in MARKET.pending if symbol is None or o.symbol == symbol)
+
+
 def history_deals_get(position=None, **kwargs):
     profit = MARKET.deals.get(int(position)) if position is not None else None
     if profit is None:
@@ -177,6 +194,22 @@ def history_deals_get(position=None, **kwargs):
 
 def order_send(request):
     MARKET.orders.append(dict(request))
+
+    if request.get("action") == TRADE_ACTION_PENDING:
+        MARKET.next_ticket += 1
+        MARKET.pending.append(Obj(
+            ticket=MARKET.next_ticket, symbol=request["symbol"], volume=request["volume"],
+            type=request["type"], magic=request.get("magic", 0),
+            price_open=request["price"], sl=request.get("sl", 0.0),
+            tp=request.get("tp", 0.0), expiration=request.get("expiration", 0)))
+        return Obj(retcode=TRADE_RETCODE_DONE, price=request["price"],
+                   volume=request["volume"], order=MARKET.next_ticket,
+                   deal=0, comment="pending placed")
+
+    if request.get("action") == TRADE_ACTION_REMOVE:
+        MARKET.pending = [o for o in MARKET.pending if o.ticket != request["order"]]
+        return Obj(retcode=TRADE_RETCODE_DONE, price=0.0, volume=0.0,
+                   order=request["order"], deal=0, comment="removed")
 
     if request.get("action") == TRADE_ACTION_SLTP:
         for p in MARKET.positions:

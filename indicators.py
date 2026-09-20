@@ -109,6 +109,58 @@ def adx(candles, period: int = 14):
     return adx_, plus_di, minus_di
 
 
+def rsi(values: np.ndarray, period: int = 14) -> np.ndarray:
+    """Relative Strength Index (Wilder). Used by the range-reversion setups."""
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+    out = np.full(n, np.nan)
+    if n < period + 1:
+        return out
+
+    delta = np.diff(values)
+    gains = np.where(delta > 0, delta, 0.0)
+    losses = np.where(delta < 0, -delta, 0.0)
+
+    avg_gain = rma(gains, period)
+    avg_loss = rma(losses, period)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rs = avg_gain / np.where(avg_loss == 0, np.nan, avg_loss)
+        value = 100.0 - (100.0 / (1.0 + rs))
+    # An all-gain window has no losses: RSI is 100, not undefined.
+    value = np.where((avg_loss == 0) & (avg_gain > 0), 100.0, value)
+    value = np.where((avg_loss == 0) & (avg_gain == 0), 50.0, value)
+
+    out[1:] = value      # diff() shortened the array by one
+    return out
+
+
+def candle_ranges(candles) -> np.ndarray:
+    """High-low range of each bar."""
+    return np.asarray(candles["high"], dtype=float) - np.asarray(candles["low"], dtype=float)
+
+
+def median_range(candles, period: int = 20) -> float:
+    """Median bar range over the last `period` bars. NaN if there are too few."""
+    ranges = candle_ranges(candles)
+    if len(ranges) < period or period < 1:
+        return float("nan")
+    return float(np.median(ranges[-period:]))
+
+
+def highest_high(candles, period: int) -> float:
+    highs = np.asarray(candles["high"], dtype=float)
+    if len(highs) < period or period < 1:
+        return float("nan")
+    return float(highs[-period:].max())
+
+
+def lowest_low(candles, period: int) -> float:
+    lows = np.asarray(candles["low"], dtype=float)
+    if len(lows) < period or period < 1:
+        return float("nan")
+    return float(lows[-period:].min())
+
+
 def swing_high(candles, lookback: int = 2, index: int | None = None):
     """
     Most recent confirmed swing high at or before `index`.

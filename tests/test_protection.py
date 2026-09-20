@@ -1,6 +1,8 @@
 """Every gate a trade must pass before it is allowed to exist."""
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 
 from protection import Protection, ProtectionConfig, from_config
 from state import JsonState
@@ -234,3 +236,80 @@ def test_news_window_accepts_an_explicit_offset():
 def test_naive_news_window_is_treated_as_utc():
     p, _ = make(news_blackout_windows=[{"label": "CPI", "start": "2026-01-15T03:30:00"}])
     assert p.check(**ok_args(now=NOW)).allowed is False
+
+
+# --- the spec's spread rule -------------------------------------------------
+def spread_gate(**over):
+    p, _ = make(**over)
+    for _ in range(20):
+        p.observe_spread(0.00010)          # median becomes 0.00010
+    return p
+
+
+def test_median_spread_is_tracked():
+    p = spread_gate()
+    assert p.median_spread() == pytest.approx(0.00010)
+
+
+def test_spread_within_median_multiple_passes():
+    p = spread_gate(spread_median_multiple=1.5, spread_atr_max=0.10)
+    assert p.check_spread(0.00014, 0.0020).allowed is True
+
+
+def test_spread_above_median_multiple_is_rejected():
+    """SPEC: current_spread <= 1.5 x recent_median_spread."""
+    p = spread_gate(spread_median_multiple=1.5, spread_atr_max=1.0)
+    d = p.check_spread(0.00016, 0.0020)
+    assert not d and "median" in d.reason
+
+
+def test_spread_above_atr_fraction_is_rejected():
+    """SPEC: current_spread / ATR_M5 <= 0.10."""
+    p = spread_gate(spread_median_multiple=99.0, spread_atr_max=0.10)
+    d = p.check_spread(0.00012, 0.0008)          # 0.15 of ATR
+    assert not d and "ATR_M5" in d.reason
+
+
+def test_both_spread_clauses_must_hold():
+    p = spread_gate(spread_median_multiple=1.5, spread_atr_max=0.10)
+    assert p.check_spread(0.00011, 0.0020).allowed is True      # both fine
+    assert p.check_spread(0.00016, 0.0020).allowed is False     # median fails
+    assert p.check_spread(0.00011, 0.0005).allowed is False     # ATR fails
+
+
+def test_spread_history_survives_restart(tmp_path):
+    p, _ = make(tmp_path)
+    for _ in range(20):
+        p.observe_spread(0.00010)
+    revived = Protection(ProtectionConfig(), state=JsonState(str(tmp_path / "s.json")))
+    assert revived.median_spread() == pytest.approx(0.00010)
+
+
+def test_nan_spread_is_not_recorded():
+    p = spread_gate()
+    p.observe_spread(float("nan"))
+    p.observe_spread(-1.0)
+    assert p.median_spread() == pytest.approx(0.00010)
+
+
+# --- the spec's stop validation --------------------------------------------
+def test_stop_must_clear_twice_the_spread():
+    """SPEC: stop_distance >= 2 x current_spread."""
+    p, _ = make(stop_min_spread_multiple=2.0)
+    assert p.check_stop(0.00025, 0.00010, 0.0020).allowed is True
+    d = p.check_stop(0.00015, 0.00010, 0.0020)
+    assert not d and "spread" in d.reason
+
+
+def test_stop_must_stay_within_atr_ceiling():
+    """SPEC: stop_distance <= 1.5 x ATR_M15."""
+    p, _ = make(stop_max_atr_multiple=1.5)
+    assert p.check_stop(0.0029, 0.00010, 0.0020).allowed is True
+    d = p.check_stop(0.0031, 0.00010, 0.0020)
+    assert not d and "ATR_M15" in d.reason
+
+
+def test_nonpositive_stop_is_rejected():
+    p, _ = make()
+    assert p.check_stop(0.0, 0.00010, 0.0020).allowed is False
+    assert p.check_stop(float("nan"), 0.00010, 0.0020).allowed is False

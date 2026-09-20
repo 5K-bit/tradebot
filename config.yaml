@@ -23,14 +23,22 @@ session:
   start: "22:00"
   end: "06:00"          # crosses midnight; Fri/Sat opens are skipped (FX shut)
 
+# Rule 1 — market regime. Thresholds are from the strategy document.
 regime:
   ema_fast: 20
   ema_slow: 50
   adx_period: 14
   atr_period: 14
-  adx_trend_min: 25.0   # REVIEW: ADX at/above this = trending
-  adx_range_max: 20.0   # REVIEW: ADX at/below this = ranging.
-                        # Between the two is neither, and neither means no trade.
+  trend_adx_min: 20.0            # SPEC trend needs ADX >= 20
+  trend_separation_atr: 0.25     # SPEC ...and EMA gap >= 0.25 x ATR
+  range_adx_max: 18.0            # SPEC range needs ADX < 18
+  range_separation_atr: 0.20     # SPEC ...and EMA gap <= 0.20 x ATR
+  # Anything satisfying neither is UNCLEAR, and unclear means hold.
+  # Score band cut-offs (the spec gives bands, not thresholds):
+  strong_adx: 25.0                    # REVIEW 25 pts vs 20 for a trend
+  strong_separation_atr: 0.50         # REVIEW
+  strong_range_adx: 15.0              # REVIEW
+  strong_range_separation_atr: 0.10   # REVIEW
 
 setups:
   enabled:
@@ -39,6 +47,33 @@ setups:
     - breakout_retest
   # Minimum reward:risk is fixed by the strategy: 2.0 for trend and breakout,
   # 1.5 for range. See MIN_RR in setups.py.
+
+# Setup geometry. SPEC values come straight from the strategy document.
+setup_params:
+  pullback_structure_atr: 0.25   # SPEC valid pullback distance
+  entry_buffer_atr: 0.05         # SPEC entry beyond the trigger candle
+  stop_buffer_atr: 0.20          # SPEC stop beyond structure
+  trigger_bars: 3                # SPEC 3-bar M5 break
+  order_expiry_bars: 3           # SPEC cancel if not triggered in 3 M5 candles
+  breakout_lookback: 12          # SPEC 12-bar M15 structure
+  breakout_buffer_atr: 0.10      # SPEC
+  breakout_expansion: 1.20       # SPEC candle range vs median of 20
+  breakout_median_bars: 20       # SPEC
+  retest_max_bars: 3             # SPEC
+  retest_distance_atr: 0.15      # SPEC
+  rsi_period: 14                 # SPEC
+  rsi_long_max: 35.0             # SPEC
+  rsi_short_min: 65.0            # SPEC
+  range_zone_pct: 0.20           # SPEC outer 20% of the range
+  range_target_pct: 0.80         # SPEC ~80% toward the far side
+  target_r: 2.0                  # SPEC base target
+  swing_lookback: 2              # REVIEW bars either side of a swing point
+  range_lookback: 20             # REVIEW bars defining "recent range structure"
+  ema_fast: 20                   # REVIEW M15 EMAs used as pullback structure
+  ema_slow: 50
+  atr_period: 14
+  location_excellent: 0.40       # REVIEW location score bands
+  location_good: 0.70
 
 scoring:
   min_score: 80         # from the strategy spec
@@ -61,6 +96,11 @@ management:
   target_r: 2.0
 
 protection:
+  spread_median_multiple: 1.5    # SPEC spread <= 1.5 x recent median
+  spread_atr_max: 0.10           # SPEC spread / ATR_M5 <= 0.10
+  spread_history: 50             # REVIEW bars of spread history kept
+  stop_min_spread_multiple: 2.0  # SPEC stop >= 2 x current spread
+  stop_max_atr_multiple: 1.5     # SPEC stop <= 1.5 x ATR_M15
   max_spread_pips: 2.0     # REVIEW: EUR/USD and USD/JPY widen overnight —
                            # this is the Asian session, so set it from your
                            # broker's actual 22:00-06:00 spreads, not its
