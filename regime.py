@@ -29,6 +29,7 @@ from indicators import ema
 TREND_UP = "bullish_trend"
 TREND_DOWN = "bearish_trend"
 RANGE = "range"
+BREAKOUT = "breakout"
 UNDEFINED = "unclear"
 
 
@@ -48,6 +49,23 @@ class RegimeConfig:
     strong_range_adx: float = 15.0       # REVIEW
     strong_range_separation_atr: float = 0.10   # REVIEW
 
+    # --- BREAKOUT as a fourth regime ---------------------------------------
+    # Rule 1 of the strategy document defines three regimes plus "unclear"; it
+    # gives no H1 conditions for a BREAKOUT regime. This classifies one by
+    # applying the document's own M15 breakout structure test to H1 bars, using
+    # the same constants. It is checked only AFTER Rule 1, so it can turn an
+    # otherwise-unclear bar into a tradeable one but can never take a bar away
+    # from TREND or RANGE. Set breakout_precedence="before" to reverse that.
+    breakout_enabled: bool = False
+    breakout_precedence: str = "after"
+    breakout_lookback: int = 12
+    breakout_buffer_atr: float = 0.10
+    breakout_expansion: float = 1.20
+    breakout_median_bars: int = 20
+    breakout_retest_bars: int = 3
+    breakout_retest_atr: float = 0.15
+    breakout_requires_retest: bool = True
+
 
 @dataclass
 class Regime:
@@ -58,6 +76,7 @@ class Regime:
     ema_slow: float
     reason: str
     close: float = float("nan")
+    breakout_direction: str | None = None
 
     @property
     def is_trend(self) -> bool:
@@ -66,6 +85,10 @@ class Regime:
     @property
     def is_range(self) -> bool:
         return self.state == RANGE
+
+    @property
+    def is_breakout(self) -> bool:
+        return self.state == BREAKOUT
 
     @property
     def is_clear(self) -> bool:
@@ -77,6 +100,8 @@ class Regime:
             return "buy"
         if self.state == TREND_DOWN:
             return "sell"
+        if self.state == BREAKOUT:
+            return self.breakout_direction
         return None
 
     @property
@@ -113,6 +138,18 @@ def classify(h1_candles, cfg: RegimeConfig = None) -> Regime:
     trend_gap = cfg.trend_separation_atr * atr_val
     range_gap = cfg.range_separation_atr * atr_val
 
+    def breakout_regime():
+        found = _detect_breakout(h1_candles, cfg, atr_val)
+        if found is None:
+            return None
+        direction, why = found
+        return Regime(BREAKOUT, adx_val, atr_val, fast, slow, why, close, direction)
+
+    if cfg.breakout_enabled and cfg.breakout_precedence == "before":
+        early = breakout_regime()
+        if early is not None:
+            return early
+
     if fast > slow and adx_val >= cfg.trend_adx_min and separation >= trend_gap:
         return Regime(TREND_UP, adx_val, atr_val, fast, slow,
                       f"EMA20>EMA50, ADX {adx_val:.1f} >= {cfg.trend_adx_min}, "
@@ -128,10 +165,66 @@ def classify(h1_candles, cfg: RegimeConfig = None) -> Regime:
                       f"ADX {adx_val:.1f} < {cfg.range_adx_max}, EMAs compressed "
                       f"({separation:.5f} <= {range_gap:.5f})", close)
 
+    if cfg.breakout_enabled:
+        late = breakout_regime()
+        if late is not None:
+            return late
+
     return Regime(UNDEFINED, adx_val, atr_val, fast, slow,
                   f"unclear: ADX {adx_val:.1f}, EMA separation {separation:.5f} "
                   f"({separation / atr_val:.2f} ATR) satisfies neither the trend "
                   f"nor the range rule", close)
+
+
+def _detect_breakout(h1_candles, cfg: RegimeConfig, atr_val: float):
+    """
+    An H1 structure break, optionally retested — the document's M15 breakout
+    test applied to H1 bars. Returns ("buy"/"sell", reason) or None.
+    """
+    from indicators import median_range
+
+    n = len(h1_candles)
+    need = cfg.breakout_median_bars + cfg.breakout_lookback + cfg.breakout_retest_bars + 2
+    if n < need or not (atr_val == atr_val and atr_val > 0):
+        return None
+
+    highs = np.asarray(h1_candles["high"], dtype=float)
+    lows = np.asarray(h1_candles["low"], dtype=float)
+    closes = np.asarray(h1_candles["close"], dtype=float)
+    buffer_ = cfg.breakout_buffer_atr * atr_val
+
+    # With a retest required, the break must be at least one bar back so there
+    # are bars in which to retest. Without one, the breakout bar itself counts.
+    first_bar_back = 1 if cfg.breakout_requires_retest else 0
+    for bars_ago in range(first_bar_back, cfg.breakout_retest_bars + 1):
+        idx = n - 1 - bars_ago
+        if idx <= cfg.breakout_lookback:
+            continue
+        window = slice(idx - cfg.breakout_lookback, idx)
+        for up in (True, False):
+            level = highs[window].max() if up else lows[window].min()
+            broke = (closes[idx] > level + buffer_) if up else (closes[idx] < level - buffer_)
+            if not broke:
+                continue
+
+            med = median_range(h1_candles[:idx + 1], cfg.breakout_median_bars)
+            bar_range = highs[idx] - lows[idx]
+            if not (med == med) or bar_range < cfg.breakout_expansion * med:
+                continue
+
+            if cfg.breakout_requires_retest:
+                distance = abs(closes[-1] - level)
+                if distance > cfg.breakout_retest_atr * atr_val:
+                    continue
+                held = (closes[-1] > level) if up else (closes[-1] < level)
+                if not held:
+                    continue
+
+            return ("buy" if up else "sell",
+                    f"H1 {'high' if up else 'low'} {level:.5f} broken {bars_ago} bar(s) "
+                    f"ago with an expansion candle"
+                    + (" and retested" if cfg.breakout_requires_retest else ""))
+    return None
 
 
 def regime_score(r: Regime, cfg: RegimeConfig = None) -> tuple[int, str]:
@@ -145,6 +238,11 @@ def regime_score(r: Regime, cfg: RegimeConfig = None) -> tuple[int, str]:
     cfg = cfg or RegimeConfig()
     if not r.is_clear:
         return 0, "regime invalid or contradictory"
+
+    if r.is_breakout:
+        # A breakout regime has no ADX/EMA band of its own in the document.
+        # Scored as a valid-but-moderate regime; raise it if you define one.
+        return 20, f"breakout regime: {r.reason}"
 
     if r.is_trend:
         strong = (r.adx >= cfg.strong_adx

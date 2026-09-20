@@ -66,6 +66,10 @@ BASE_CONFIG = {
                    "news_blackout_minutes_after": 30},
     "pip": {"size": 0.0001, "value_per_lot": 10,
             "overrides": {"USDJPY": {"size": 0.01, "value_per_lot": 6.7}}},
+    # The fake terminal IS the broker under test, so the suite runs LIVE
+    # against it. PAPER mode is covered by its own tests, which assert that
+    # nothing reaches the terminal at all.
+    "safety": {"default_mode": "LIVE", "live_trading_enabled": True},
 }
 
 

@@ -313,3 +313,25 @@ def test_nonpositive_stop_is_rejected():
     p, _ = make()
     assert p.check_stop(0.0, 0.00010, 0.0020).allowed is False
     assert p.check_stop(float("nan"), 0.00010, 0.0020).allowed is False
+
+
+def test_minimum_stop_pips_is_enforced():
+    """An absolute pip floor on top of the spec's spread and ATR rules."""
+    p, _ = make(min_stop_pips=3.0)
+    pip = 0.0001
+    assert p.check_stop(0.0004, 0.00001, 0.0020, pip).allowed is True    # 4 pips
+    d = p.check_stop(0.0002, 0.00001, 0.0020, pip)                       # 2 pips
+    assert not d and "3.0 pip minimum" in d.reason
+
+
+def test_minimum_stop_pips_is_additive_not_a_replacement():
+    """A stop clearing the pip floor still fails if it is under 2x the spread."""
+    p, _ = make(min_stop_pips=3.0, stop_min_spread_multiple=2.0)
+    d = p.check_stop(0.0004, 0.00030, 0.0020, 0.0001)   # 4 pips but spread is 3
+    assert not d and "spread" in d.reason
+
+
+def test_minimum_stop_pips_disabled_by_default():
+    p, _ = make()
+    assert p.cfg.min_stop_pips == 0.0
+    assert p.check_stop(0.0002, 0.00001, 0.0020, 0.0001).allowed is True

@@ -30,6 +30,16 @@ RECONNECT_BACKOFF_SECONDS = (2, 4, 8, 16, 32)
 
 
 @dataclass
+class _Result:
+    retcode: int
+    price: float
+    volume: float
+    order: int
+    deal: int
+    comment: str
+
+
+@dataclass
 class AccountInfo:
     login: int
     balance: float
@@ -54,6 +64,11 @@ class MT5Connector:
         self.server = os.environ["MT5_SERVER"]
         self.path = os.environ.get("MT5_PATH")  # optional
         self._selected: set[str] = set()
+        # In PAPER/BACKTEST the connector still reads prices and account state,
+        # but every order-sending call is simulated. The guard lives here rather
+        # than in the caller so there is exactly one place an order can escape.
+        self.dry_run = False
+        self._paper_ticket = 900_000
 
     def connect(self, quiet: bool = False) -> None:
         init_kwargs = {}
@@ -207,12 +222,26 @@ class MT5Connector:
         if tp_price is not None:
             request["tp"] = round(tp_price, limits.digits)
 
+        if self.dry_run:
+            return self._simulated("MARKET", symbol, volume, price,
+                                   request.get("sl", 0.0), request.get("tp", 0.0))
+
         result = mt5.order_send(request)
         if result is None:
             raise RuntimeError(f"order_send({symbol}) returned None: {mt5.last_error()}")
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             raise RuntimeError(f"order_send failed: retcode={result.retcode} comment={result.comment}")
         return result
+
+    def _simulated(self, kind: str, symbol: str, volume: float, price: float,
+                   sl: float = 0.0, tp: float = 0.0):
+        """A result object shaped like a real one, with nothing sent."""
+        self._paper_ticket += 1
+        print(f"[paper] {kind} {symbol} vol={volume} price={price} "
+              f"sl={sl} tp={tp} — simulated, nothing sent to the broker")
+        return _Result(retcode=mt5.TRADE_RETCODE_DONE, price=price, volume=volume,
+                       order=self._paper_ticket, deal=self._paper_ticket,
+                       comment="paper")
 
     def pending_stop_order(self, symbol: str, volume: float, direction: str,
                            entry_price: float, sl_price: float, tp_price: float,
@@ -245,6 +274,10 @@ class MT5Connector:
         else:
             request["type_time"] = mt5.ORDER_TIME_GTC
 
+        if self.dry_run:
+            return self._simulated("PENDING", symbol, volume, request["price"],
+                                   request["sl"], request["tp"])
+
         result = mt5.order_send(request)
         if result is None:
             raise RuntimeError(f"pending_stop_order({symbol}) returned None: {mt5.last_error()}")
@@ -265,6 +298,8 @@ class MT5Connector:
         """Remove a working order — used when its entry window expires."""
         if getattr(order, "magic", None) != MAGIC:
             raise RuntimeError(f"refusing to cancel order {order.ticket}: not this bot's")
+        if self.dry_run:
+            return self._simulated("CANCEL", order.symbol, 0.0, 0.0)
         result = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": order.ticket})
         if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
             code = getattr(result, "retcode", "None")
@@ -293,6 +328,10 @@ class MT5Connector:
         }
         if new_tp is not None:
             request["tp"] = round(new_tp, limits.digits)
+
+        if self.dry_run:
+            return self._simulated("MODIFY", position.symbol, position.volume,
+                                   request["sl"])
 
         result = mt5.order_send(request)
         if result is None:
@@ -334,6 +373,9 @@ class MT5Connector:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
+        if self.dry_run:
+            return self._simulated("CLOSE", symbol, volume, price)
+
         result = mt5.order_send(request)
         if result is None:
             raise RuntimeError(f"close order_send({symbol}) returned None: {mt5.last_error()}")

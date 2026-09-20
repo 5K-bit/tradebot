@@ -246,3 +246,56 @@ def m15_failed_breakout(n=60, base=1.0950, step=0.00008, seed=7):
     for c in (top + step * 6, top - step * 0.3):
         bars.append((prev, prev + step, min(prev, c) - step, c)); prev = c
     return ohlc(bars)
+
+
+def h1_breakout_regime(n=90, base=1.1000, noise=0.00035, seed=4, retest=True):
+    """
+    A long quiet consolidation, then one expansion candle through the 12-bar
+    high, then a retest of the broken level.
+
+    This is the niche a BREAKOUT regime occupies: the EMAs have separated but
+    ADX has not yet caught up, so Rule 1 calls it unclear while the structure
+    is plainly a break.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    bars = []
+    prev = base
+    for _ in range(n):
+        c = base + rng.normal(0, noise)
+        bars.append((prev, max(prev, c) + noise, min(prev, c) - noise, c))
+        prev = c
+
+    level = max(b[1] for b in bars[-12:])
+    brk_close = level + noise * 9
+    # A wide-range bar: its high-low must clear 1.2x the median of the last 20.
+    bars.append((prev, brk_close + noise * 2, prev - noise * 7, brk_close))
+    prev = brk_close
+    if retest:
+        for c in (level + noise * 4, level + noise * 0.4):
+            bars.append((prev, prev + noise, min(prev, c) - noise, c))
+            prev = c
+    return ohlc(bars, bar_seconds=3600)
+
+
+def h1_trend_with_breakout(n=90, base=1.0900, step=0.0009, seed=6):
+    """
+    A market that is BOTH a Rule 1 trend AND a fresh structure break with a
+    retest. Precedence between the two only matters on a series like this.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    bars = []
+    prev = base
+    for i in range(n):
+        c = base + i * step + rng.normal(0, step * 0.15)
+        bars.append((prev, max(prev, c) + step * 0.3, min(prev, c) - step * 0.3, c))
+        prev = c
+    level = max(b[1] for b in bars[-12:])
+    brk = level + step * 2.5
+    bars.append((prev, brk + step * 0.8, prev - step * 2.5, brk))   # expansion bar
+    prev = brk
+    for c in (level + step * 1.2, level + step * 0.1):              # retest
+        bars.append((prev, prev + step * 0.2, min(prev, c) - step * 0.2, c))
+        prev = c
+    return ohlc(bars, bar_seconds=3600)

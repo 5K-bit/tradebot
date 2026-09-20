@@ -23,7 +23,6 @@ Run with:  python3 trader.py
 Stop with: Ctrl+C (does NOT auto-close open positions — see README)
 """
 import json
-import math
 import time
 import traceback
 from datetime import datetime, timezone
@@ -32,6 +31,7 @@ from pathlib import Path
 import MetaTrader5 as mt5
 import yaml
 
+import config_schema as schema
 import indicators
 import protection as protection_mod
 import regime as regime_mod
@@ -40,7 +40,7 @@ import sessions
 import setups
 import trade_management as tm
 from mt5_connector import MT5Connector
-from risk_manager import RiskConfig, RiskManager
+from risk_manager import RiskManager
 from state import JsonState
 
 TIMEFRAME_MAP = {
@@ -70,55 +70,42 @@ def load_config(path: str = "config.yaml") -> dict:
 
 
 def resolve_pip(cfg: dict, symbol: str) -> tuple[float, float]:
-    """Pip size and per-lot pip value for one symbol, with per-symbol overrides."""
-    pip_cfg = cfg["pip"]
-    overrides = pip_cfg.get("overrides") or {}
-    entry = overrides.get(symbol) or {}
-
-    size = entry.get("size", pip_cfg["size"])
-    value_per_lot = entry.get("value_per_lot", pip_cfg["value_per_lot"])
-
-    if "size" not in entry and len(symbol) == 6 and symbol.isalpha():
-        expected = 0.01 if symbol[-3:].upper() == "JPY" else 0.0001
-        if not math.isclose(size, expected, rel_tol=1e-9):
-            raise ValueError(
-                f"pip.size {size} is wrong for {symbol} (expected {expected}). "
-                f"Add an explicit pip.overrides.{symbol}.size in config.yaml."
-            )
-    if size <= 0 or value_per_lot <= 0:
-        raise ValueError(f"pip size/value_per_lot for {symbol} must be > 0.")
-    return size, value_per_lot
+    """Pip size and per-lot value for one symbol. See config_schema.pip_for."""
+    return schema.pip_for(cfg, symbol)
 
 
-def validate_config(cfg: dict) -> None:
-    """Fail at startup, not on the first live signal."""
-    symbols = cfg.get("symbols") or []
-    if not symbols:
-        raise ValueError("config.yaml lists no symbols.")
+def validate_config(cfg: dict):
+    """
+    Fail at startup, not on the first live signal.
 
-    tfs = cfg.get("timeframes") or {}
-    for role in ("regime", "setup", "entry"):
-        name = tfs.get(role)
-        if name not in TIMEFRAME_MAP:
-            raise ValueError(
-                f"timeframes.{role} is {name!r}; expected one of {sorted(TIMEFRAME_MAP)}."
-            )
+    Returns the normalised view the engine runs from. Refuses a config that
+    would leave the bot running but never trading — those are reported all at
+    once rather than one restart at a time.
+    """
+    norm = schema.normalise(cfg)
+    problems = schema.check_safety(cfg, norm)
+    if problems:
+        raise schema.ConfigError(
+            "this configuration would stop the bot trading:\n  - "
+            + "\n  - ".join(problems))
+    for symbol in norm.symbols:
+        schema.pip_for(cfg, symbol)
 
-    risk_pct = (cfg.get("risk") or {}).get("risk_per_trade_pct")
-    if risk_pct not in ALLOWED_RISK_PCT:
-        raise ValueError(
-            f"risk.risk_per_trade_pct is {risk_pct}; the strategy allows "
-            f"{ALLOWED_RISK_PCT} (0.5%, 1%, 2%)."
-        )
-
-    enabled = (cfg.get("setups") or {}).get("enabled") or []
-    unknown = [s for s in enabled if s not in setups.ALL_SETUPS]
+    # A setup name that matches nothing is a typo, not a disabled strategy —
+    # silently ignoring it would leave the operator thinking it was running.
+    named = set((cfg.get("strategies") or {}).keys()) | set(
+        (cfg.get("setups") or {}).get("enabled") or [])
+    unknown = sorted(named - set(setups.ALL_SETUPS))
     if unknown:
-        raise ValueError(f"unknown setups in config: {unknown}. Known: {list(setups.ALL_SETUPS)}")
+        raise schema.ConfigError(
+            f"unknown setups in config: {unknown}. "
+            f"Known: {list(setups.ALL_SETUPS)}")
+
+    if not schema.enabled_setups(cfg):
+        raise schema.ConfigError("no setups are enabled.")
 
     sessions.from_config(cfg)            # raises on a bad timezone or HH:MM
-    for symbol in symbols:
-        resolve_pip(cfg, symbol)
+    return norm
 
 
 def log_to_vault(vault_path: str, message: str):
@@ -139,52 +126,54 @@ def log_decision(vault_path: str, symbol: str, outcome: str, reason: str, **fiel
     log_to_vault(vault_path, f"{outcome} {symbol}{detail} — {reason}")
 
 
+def append_jsonl(path: str | None, record: dict) -> None:
+    """One JSON object per line. Machine-readable companion to the vault log."""
+    if not path:
+        return
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    record = {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              **record}
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+
+
 class Lathe:
-    def __init__(self, cfg: dict, conn: MT5Connector, state: JsonState):
+    def __init__(self, cfg: dict, conn: MT5Connector, state: JsonState,
+                 norm=None):
         self.cfg = cfg
         self.conn = conn
         self.state = state
-        self.vault = cfg["vault"]["log_path"]
+        self.norm = norm or schema.normalise(cfg)
+
+        self.vault = self.norm.trade_log
+        self.decision_log = self.norm.decision_log
+        self.rejection_log = self.norm.rejection_log
+
+        self.mode = schema.effective_mode(self.norm)
+        # One place an order can escape, and it is shut unless the mode is LIVE.
+        self.conn.dry_run = self.mode != schema.MODE_LIVE
 
         self.session = sessions.from_config(cfg)
-        self.regime_cfg = regime_mod.from_config(cfg)
+        self.regime_cfg = schema.regime_config(cfg)
+        self.setup_cfg = schema.setup_config(cfg)
         self.protection = protection_mod.Protection(
-            protection_mod.from_config(cfg), state=state)
+            schema.protection_config(cfg), state=state)
+        self.mgmt = schema.management_config(cfg)
+        self.risk = RiskManager(schema.risk_config(cfg, self.norm), state=state)
 
-        m = cfg.get("management") or {}
-        self.mgmt = tm.ManagementConfig(
-            atr_stop_multiple=m.get("atr_stop_multiple", 0.5),
-            breakeven_at_r=m.get("breakeven_at_r", 1.0),
-            breakeven_offset_r=m.get("breakeven_offset_r", 0.0),
-            trail_start_r=m.get("trail_start_r", 1.5),
-            trail_distance_r=m.get("trail_distance_r", 1.0),
-            target_r=m.get("target_r", 2.0),
-        )
+        self.tf_regime = TIMEFRAME_MAP[self.norm.tf_regime]
+        self.tf_setup = TIMEFRAME_MAP[self.norm.tf_setup]
+        self.tf_entry = TIMEFRAME_MAP[self.norm.tf_entry]
+        self.entry_bar_seconds = self.norm.entry_seconds
 
-        r = cfg["risk"]
-        self.risk = RiskManager(RiskConfig(
-            risk_per_trade_pct=r["risk_per_trade_pct"],
-            max_daily_loss_pct=r["max_daily_loss_pct"],
-            max_open_positions=r.get("max_concurrent_trades", 1),
-            max_lot_size=r.get("max_lot_size", 1.0),
-            broker_utc_offset_hours=r.get("broker_utc_offset_hours", 0),
-        ), state=state)
-
-        tfs = cfg["timeframes"]
-        self.tf_regime = TIMEFRAME_MAP[tfs["regime"]]
-        self.tf_setup = TIMEFRAME_MAP[tfs["setup"]]
-        self.tf_entry = TIMEFRAME_MAP[tfs["entry"]]
-
-        self.setup_cfg = setups.from_config(cfg)
-        self.enabled_setups = (cfg.get("setups") or {}).get("enabled") or []
-        self.regime_map = (cfg.get("setups") or {}).get("regime_map") or DEFAULT_REGIME_MAP
-        self.min_score = (cfg.get("scoring") or {}).get("min_score", scoring.MIN_SCORE)
+        self.enabled_setups = schema.enabled_setups(cfg)
+        self.regime_map = schema.regime_map(cfg) or DEFAULT_REGIME_MAP
+        self.min_score = schema.min_score(cfg)
 
         self.bar_cursor = {str(k): int(v) for k, v in (state.get("last_bar_time") or {}).items()}
-        self.trade_meta = dict(state.get("trade_meta") or {})   # ticket -> entry/stop
+        self.trade_meta = dict(state.get("trade_meta") or {})
         self._atr_history: dict = {}
-        self.entry_bar_seconds = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800,
-                                  "H1": 3600, "H4": 14400, "D1": 86400}[tfs["entry"]]
 
     # --- open position management -----------------------------------------
     def manage_open_positions(self, now: datetime) -> None:
@@ -275,6 +264,8 @@ class Lathe:
             connected=True,
         )
         if not gate:
+            append_jsonl(self.rejection_log,
+                         {"symbol": symbol, "signal": "HOLD", "reason": gate.reason})
             log_decision(self.vault, symbol, "HOLD", gate.reason)
             return
 
@@ -330,7 +321,8 @@ class Lathe:
             breakdown.execution = 0
             breakdown.blockers.append(spread_ok.reason)
 
-        stop_ok = self.protection.check_stop(candidate.risk_distance, spread, atr_m15)
+        stop_ok = self.protection.check_stop(candidate.risk_distance, spread,
+                                             atr_m15, pip_size)
         if not stop_ok:
             breakdown.blockers.append(stop_ok.reason)
 
@@ -338,6 +330,8 @@ class Lathe:
                                        breakdown, self.risk.config.risk_per_trade_pct)
 
         if not breakdown.executable:
+            append_jsonl(self.rejection_log, signal)
+            append_jsonl(self.decision_log, signal)
             log_decision(self.vault, symbol, "HOLD",
                          "; ".join(breakdown.blockers) or "score below threshold",
                          setup=candidate.setup, score=breakdown.total,
@@ -372,6 +366,8 @@ class Lathe:
 
         signal["ticket"] = result.order
         signal["lots"] = lots
+        signal["mode"] = self.mode
+        append_jsonl(self.decision_log, signal)
         log_to_vault(self.vault, f"SIGNAL {json.dumps(signal, default=str)}")
         log_decision(
             self.vault, symbol, signal["signal"],

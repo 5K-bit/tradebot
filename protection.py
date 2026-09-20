@@ -51,6 +51,7 @@ class ProtectionConfig:
     spread_history: int = 50              # REVIEW bars of spread history kept
     stop_min_spread_multiple: float = 2.0 # SPEC stop >= 2x current spread
     stop_max_atr_multiple: float = 1.5    # SPEC stop <= 1.5x ATR_M15
+    min_stop_pips: float = 0.0            # absolute floor, in pips; 0 disables
     consecutive_loss_limit: int = 2
     cooldown_scope: str = "session"      # "session" = sit out the rest of it
     cooldown_minutes: int = 0            # used when cooldown_scope == "minutes"
@@ -165,10 +166,22 @@ class Protection:
                                        f"{self.cfg.spread_atr_max} limit")
         return ALLOW
 
-    def check_stop(self, stop_distance: float, spread: float, atr_m15: float) -> Decision:
-        """SPEC: stop >= 2 * current spread AND stop <= 1.5 * ATR_M15."""
+    def check_stop(self, stop_distance: float, spread: float, atr_m15: float,
+                   pip_size: float | None = None) -> Decision:
+        """
+        SPEC: stop >= 2 * current spread AND stop <= 1.5 * ATR_M15.
+
+        An absolute pip floor is applied on top when configured. It is an extra
+        constraint, never a replacement — a 3-pip stop that is still under twice
+        the spread is rejected by the spread rule regardless.
+        """
         if stop_distance is None or stop_distance != stop_distance or stop_distance <= 0:
             return Decision(False, "stop distance is not a positive number")
+        if self.cfg.min_stop_pips and pip_size:
+            floor_pips = self.cfg.min_stop_pips * pip_size
+            if stop_distance < floor_pips:
+                return Decision(False, f"stop {stop_distance:.5f} is under the "
+                                       f"{self.cfg.min_stop_pips} pip minimum")
         floor_ = self.cfg.stop_min_spread_multiple * spread
         if stop_distance < floor_:
             return Decision(False, f"stop {stop_distance:.5f} is under "
@@ -315,6 +328,7 @@ def from_config(cfg: dict) -> ProtectionConfig:
         spread_history=p.get("spread_history", 50),
         stop_min_spread_multiple=p.get("stop_min_spread_multiple", 2.0),
         stop_max_atr_multiple=p.get("stop_max_atr_multiple", 1.5),
+        min_stop_pips=p.get("min_stop_pips", 0.0),
         consecutive_loss_limit=p.get("consecutive_loss_limit", 2),
         cooldown_scope=p.get("cooldown_scope", "session"),
         cooldown_minutes=p.get("cooldown_minutes", 0),

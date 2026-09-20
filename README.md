@@ -3,11 +3,15 @@
 Implements LATHE ADAPTIVE SESSION STRATEGY v1 — six setups, a six-category
 signal score, and a protection layer — against an MT5 account.
 
-> ### ⚠️ Not yet validated against a live broker
+> ### ⚠️ Ships in PAPER mode. Not yet validated against a live broker.
 >
-> The strategy is fully implemented and tested, but every test runs against a
-> fake MT5 terminal. No order has ever reached a real broker. Demo account
-> first, and read the REVIEW markers in `config.yaml` before funding anything.
+> `safety.default_mode` is `PAPER`, so no order reaches the broker. Going live
+> needs **both** `default_mode: LIVE` and `live_trading_enabled: true` —
+> setting one alone still runs PAPER, so a mistyped mode cannot start trading
+> real money.
+>
+> Every test runs against a fake MT5 terminal; no order has ever reached a real
+> broker. Demo first, and read the REVIEW markers in `config.yaml`.
 
 ## Requirements
 
@@ -132,6 +136,37 @@ unless you intend to reset the daily loss limit.
 
 **Ctrl+C stops the loop but does not close open positions** — check MT5
 directly before walking away.
+
+## Configuration
+
+`config.yaml` is grouped by concern; the engine wants flat values.
+`config_schema.py` is the single place that maps one to the other, so a rename
+in the config never has to be chased through a dozen readers. It accepts both
+the grouped layout and the older flat one.
+
+It also **refuses configurations that would leave the bot running but never
+trading** — the failure mode that looks like success. Two are checked at
+startup:
+
+- `data.maximum_candle_age_seconds` at or below the setup timeframe. An M15 bar
+  is legitimately up to 900s old just before the next closes, so a 120s limit
+  rejects healthy data for 87% of every bar.
+- `indicators.swing.lookback` above 5. A swing needs that many bars on *each*
+  side, so 20 means 41 bars per swing and two swings for a higher low —
+  trend-pullback entries would effectively never fire.
+
+Values marked `SPEC` come from the strategy document. Values marked `REVIEW`
+do not, and are yours to set deliberately.
+
+### Modes
+
+| Mode | Behaviour |
+|---|---|
+| `BACKTEST` / `PAPER` | decisions are made and logged; no order is sent |
+| `LIVE` | orders reach the broker — needs `live_trading_enabled: true` too |
+
+The guard lives on the connector, so there is exactly one place an order can
+escape and one place to test it.
 
 ## Tests
 
