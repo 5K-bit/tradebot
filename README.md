@@ -1,7 +1,22 @@
 # Lathe — Forex Trader Module
 
-Adds a live MT5 trading capability to the assistant. Trades real money in
-your MT5 account against rules you define in `strategy.py`.
+Implements LATHE ADAPTIVE SESSION STRATEGY v1 against a live MT5 account.
+
+> ### ⚠️ This bot cannot currently open a trade — by design
+>
+> The strategy document names three setups (Trend Pullback, Range Reversion,
+> Breakout + Retest) and requires a signal score of 80 or more, but defines
+> neither the setup rules nor the score formula. `setups.py` and `scoring.py`
+> therefore ship **fail-closed**: they refuse and record why, rather than
+> guessing at entry logic for an account with money in it.
+>
+> Everything around them is built and tested: session gating, H1 regime
+> classification, the protection layer, risk sizing, RR validation, trade
+> management and decision logging. Fill in the two stubs — each lists exactly
+> what it needs in its docstring — and the bot goes live.
+>
+> Until then it runs in observation mode, logging the decision it would have
+> made at every setup bar.
 
 ## Requirements
 
@@ -44,12 +59,40 @@ Edit `config.yaml`:
 - `state.path` — where the kill-switch baseline and candle cursor persist
 - `vault.log_path` — where trade activity gets logged as markdown
 
-## Put your strategy in
+## The pipeline
 
-Open `strategy.py` and replace `generate_signal()` with your actual
-entry/exit rules. It receives the recent candles and whether a position
-is already open, and returns `"buy"`, `"sell"`, `"close"`, or `None`.
-Everything else (sizing, execution, logging) stays as-is.
+Per symbol, once per closed M15 bar inside the session:
+
+```
+session open?  ->  H1 regime  ->  M15 setup  ->  M5 entry refinement
+               ->  RR check   ->  signal score >= 80
+               ->  protection gates  ->  risk sizing  ->  order
+```
+
+Any gate that fails ends the evaluation and records a reason. Every decision,
+taken or rejected, is written to the trade log — the rules require a reason for
+rejections, not only for fills.
+
+| Module | Role |
+|---|---|
+| `sessions.py` | the 22:00–06:00 New York window, DST-aware, Fri/Sat excluded |
+| `regime.py` | H1 EMA20/EMA50 + ADX14 + ATR14 → trend / range / neither |
+| `setups.py` | the three entry patterns — **stubs, see above** |
+| `scoring.py` | the ≥80 signal score — **stub, see above** |
+| `protection.py` | session, concurrency, trade count, cooldown, spread, news, data health, account drawdown |
+| `risk_manager.py` | position sizing and the daily loss stop |
+| `trade_management.py` | structural ATR stop, break-even at +1R, trailing from +1.5R, 2R target |
+| `indicators.py` | EMA, Wilder ATR and ADX, swing structure |
+
+### Filling in a setup
+
+Each detector takes the closed M15 candles, the closed M5 candles, the current
+`Regime`, and the config, and returns `(SetupCandidate, reason)` or
+`(None, reason)`. The candidate carries entry, stop, target and the structural
+level the stop is anchored to; RR is computed from those and checked against
+the strategy minimums (2.0 for trend and breakout, 1.5 for range) before
+anything is sized. See the docstrings in `setups.py` and `scoring.py` for the
+specific parameters each one needs.
 
 ## Run
 
@@ -79,8 +122,8 @@ python3 -m pytest
 
 The suite runs anywhere — Linux, CI, a machine with no MT5 at all. It stubs
 the `MetaTrader5` package with a fake terminal (`tests/fake_mt5.py`) that the
-real bot code drives unmodified, so you can change `strategy.py` and check
-the pipeline without pointing anything at a broker. The fake is installed
+real bot code drives unmodified, so you can develop a setup in `setups.py`
+and exercise the whole pipeline without pointing anything at a broker. The fake is installed
 unconditionally, so tests never reach a live terminal even on Windows.
 
 Warnings are configured as failures (`pytest.ini`). On a bot meant to run
@@ -88,10 +131,36 @@ unattended for days against real money, a leaked file handle or a deprecation
 notice is worth hearing about while it is still cheap to fix.
 
 Coverage is aimed at the things that cost money rather than at a line-count
-target: that the strategy runs once per closed candle, that the bot only ever
-closes positions it opened, that the kill switch survives a restart, that lot
-sizing cannot exceed the configured risk, and an end-to-end run of the main
-loop through a simulated terminal outage.
+target: indicator math against hand-computed values, the session window across
+DST and the weekend closure, regime classification including the deliberate
+"neither" band, every protection gate, stop management that can only ever move
+in the trade's favour, and an end-to-end run of the main loop through a
+terminal outage and both kill switches.
+
+The suite is mutation-tested: 31 safety rules were each broken in a scratch
+copy and the suite confirmed to fail for every one. That exercise is what
+caught the two tests that were passing for the wrong reason.
+
+## Protection
+
+| Gate | Source |
+|---|---|
+| Trading window | 22:00–06:00 America/New_York, Fri/Sat opens skipped |
+| Concurrency | 1 open trade |
+| Session cap | 3 trades per overnight session |
+| Cooldown | 2 consecutive losses sit out the rest of the session |
+| Daily stop | 5% of equity, persists across restarts |
+| Account kill switch | 10% drawdown from the equity high-water mark — **sticky**, cleared only by hand |
+| Spread filter | configurable ceiling, checked per decision |
+| Data health | stale candles, missing ticks and a dropped terminal all mean no trade |
+| News blackout | manual windows in config (see below) |
+
+### News blackout is manual
+
+The MetaTrader5 Python API exposes no economic calendar, so high-impact news
+windows are entered by hand in `config.yaml` under
+`protection.news_blackout_windows`. **Anything not listed is not blacked out.**
+Automating this needs an external calendar provider, which is not wired in.
 
 ## What the bot will and won't touch
 

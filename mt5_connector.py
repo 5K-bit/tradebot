@@ -214,6 +214,36 @@ class MT5Connector:
             raise RuntimeError(f"order_send failed: retcode={result.retcode} comment={result.comment}")
         return result
 
+    def modify_stop(self, position, new_sl: float, new_tp: float | None = None):
+        """
+        Move an open position's stop-loss (and optionally its target).
+
+        Used by trade management to step the stop to break-even and then trail
+        it. Refuses foreign positions for the same reason close_position does.
+        """
+        if position.magic != MAGIC:
+            raise RuntimeError(
+                f"refusing to modify position {position.ticket} on {position.symbol}: "
+                f"magic={position.magic} is not this bot's ({MAGIC})."
+            )
+        limits = self.symbol_limits(position.symbol)
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": position.symbol,
+            "position": position.ticket,
+            "sl": round(new_sl, limits.digits),
+            "magic": MAGIC,
+        }
+        if new_tp is not None:
+            request["tp"] = round(new_tp, limits.digits)
+
+        result = mt5.order_send(request)
+        if result is None:
+            raise RuntimeError(f"modify_stop({position.symbol}) returned None: {mt5.last_error()}")
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(f"modify_stop failed: retcode={result.retcode} comment={result.comment}")
+        return result
+
     def close_position(self, position, deviation: int = 20):
         if position.magic != MAGIC:
             # Belt and braces: open_positions() already filters, but this is

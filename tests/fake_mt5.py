@@ -15,6 +15,7 @@ TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M15 = 1, 5, 15
 TIMEFRAME_M30, TIMEFRAME_H1, TIMEFRAME_H4, TIMEFRAME_D1 = 30, 16385, 16388, 16408
 ORDER_TYPE_BUY, ORDER_TYPE_SELL = 0, 1
 TRADE_ACTION_DEAL = 1
+TRADE_ACTION_SLTP = 2
 ORDER_TIME_GTC = 0
 ORDER_FILLING_IOC = 1
 TRADE_RETCODE_DONE = 10009
@@ -36,11 +37,12 @@ class Obj:
         return f"Obj({self.__dict__})"
 
 
-def make_rates(prices, first_index: int = 0):
+def make_rates(prices, first_index: int = 0, anchor: float = 0.0):
     """Build an MT5-shaped rates array from a list of closing prices."""
     arr = np.zeros(len(prices), dtype=RATES_DTYPE)
     for i, p in enumerate(prices):
-        arr[i] = ((first_index + i) * BAR_SECONDS, p, p + 0.0002, p - 0.0002, p, 100, 10, 0)
+        t = int(anchor + (first_index + i) * BAR_SECONDS)
+        arr[i] = (t, p, p + 0.0002, p - 0.0002, p, 100, 10, 0)
     return arr
 
 
@@ -63,6 +65,17 @@ class Market:
         self.selected = []            # symbols pushed into Market Watch
         self.trade_mode = ACCOUNT_TRADE_MODE_DEMO
         self.init_calls = 0
+
+        # Bar times are anchored so the forming bar sits at now_ts, matching a
+        # real terminal where the newest bar is "now" — otherwise every candle
+        # looks decades stale to the data-health gate.
+        self.now_ts = 1768447800.0
+        self.series = {}          # timeframe -> list of closed prices
+        self.deals = {}           # ticket -> realised profit
+
+    def set_series(self, timeframe, prices, forming=None):
+        """Give one timeframe its own candle series."""
+        self.series[timeframe] = (list(prices), forming)
 
     def price(self):
         return self.forming_price if self.forming_price is not None else self.closed_prices[-1]
@@ -133,23 +146,47 @@ def symbol_info_tick(symbol):
 
 
 def copy_rates_from_pos(symbol, timeframe, start_pos, count):
-    prices = list(MARKET.closed_prices)
-    if MARKET.forming_price is not None:
-        prices.append(MARKET.forming_price)
+    if timeframe in MARKET.series:
+        closed, forming = MARKET.series[timeframe]
+    else:
+        closed, forming = MARKET.closed_prices, MARKET.forming_price
+    prices = list(closed)
+    if forming is not None:
+        prices.append(forming)
     prices = prices[-count:]
     if not prices:
         return None
-    forming = 1 if MARKET.forming_price is not None else 0
-    first_index = len(MARKET.closed_prices) + forming - len(prices)
-    return make_rates(prices, first_index)
+    n_forming = 1 if forming is not None else 0
+    total = len(closed) + n_forming
+    first_index = total - len(prices)
+    # Place the newest bar at now_ts and step backwards from there.
+    anchor = MARKET.now_ts - (total - 1) * BAR_SECONDS
+    return make_rates(prices, first_index, anchor)
 
 
 def positions_get(symbol=None):
     return tuple(p for p in MARKET.positions if symbol is None or p.symbol == symbol)
 
 
+def history_deals_get(position=None, **kwargs):
+    profit = MARKET.deals.get(int(position)) if position is not None else None
+    if profit is None:
+        return ()
+    return (Obj(profit=profit, position=int(position)),)
+
+
 def order_send(request):
     MARKET.orders.append(dict(request))
+
+    if request.get("action") == TRADE_ACTION_SLTP:
+        for p in MARKET.positions:
+            if p.ticket == request["position"]:
+                p.sl = request.get("sl", p.sl)
+                if "tp" in request:
+                    p.tp = request["tp"]
+        return Obj(retcode=TRADE_RETCODE_DONE, price=0.0, volume=0.0,
+                   order=request["position"], deal=0, comment="sltp done")
+
     slip = MARKET.slippage if request["type"] == ORDER_TYPE_BUY else -MARKET.slippage
     fill = request["price"] + slip
 

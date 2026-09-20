@@ -64,10 +64,48 @@ def test_nonpositive_pip_values_rejected(config):
         trader.resolve_pip(cfg, "EURUSD")
 
 
-def test_unknown_timeframe_rejected_at_startup(config):
+@pytest.mark.parametrize("role", ["regime", "setup", "entry"])
+def test_unknown_timeframe_rejected_at_startup(config, role):
     cfg = copy.deepcopy(config)
-    cfg["timeframe"] = "M7"
-    with pytest.raises(ValueError, match="Unknown timeframe"):
+    cfg["timeframes"][role] = "M7"
+    with pytest.raises(ValueError, match=f"timeframes.{role}"):
+        trader.validate_config(cfg)
+
+
+def test_missing_timeframe_role_rejected(config):
+    cfg = copy.deepcopy(config)
+    del cfg["timeframes"]["entry"]
+    with pytest.raises(ValueError, match="timeframes.entry"):
+        trader.validate_config(cfg)
+
+
+@pytest.mark.parametrize("pct", [0.005, 0.01, 0.02])
+def test_selectable_risk_levels_accepted(config, pct):
+    cfg = copy.deepcopy(config)
+    cfg["risk"]["risk_per_trade_pct"] = pct
+    trader.validate_config(cfg)
+
+
+@pytest.mark.parametrize("pct", [0.03, 0.1, 0.0, 1.0])
+def test_other_risk_levels_rejected(config, pct):
+    """The strategy allows 0.5/1/2% only — a typo must not become a 10% risk."""
+    cfg = copy.deepcopy(config)
+    cfg["risk"]["risk_per_trade_pct"] = pct
+    with pytest.raises(ValueError, match="risk_per_trade_pct"):
+        trader.validate_config(cfg)
+
+
+def test_unknown_setup_name_rejected(config):
+    cfg = copy.deepcopy(config)
+    cfg["setups"]["enabled"] = ["trend_pullback", "moon_phase"]
+    with pytest.raises(ValueError, match="moon_phase"):
+        trader.validate_config(cfg)
+
+
+def test_bad_session_timezone_rejected(config):
+    cfg = copy.deepcopy(config)
+    cfg["session"]["timezone"] = "Not/AZone"
+    with pytest.raises(Exception):
         trader.validate_config(cfg)
 
 
