@@ -89,3 +89,26 @@ def test_mode_is_recorded_on_the_signal(config, conn, market, tmp_path):
     bot.evaluate("EURUSD", "2026-01-14", conn.account_info(), NOW)
     line = [x for x in read_log(bot.vault).splitlines() if "SIGNAL {" in x][0]
     assert json.loads(line.split("SIGNAL ", 1)[1])["mode"] == "PAPER"
+
+
+def test_filling_mode_and_slippage_reach_the_connector(config, conn, tmp_path):
+    """preflight reports what the broker accepts; the bot must be able to use it."""
+    cfg = copy.deepcopy(config)
+    cfg["execution"] = {"filling_mode": "FOK", "max_slippage_points": 35}
+    bot = trader.Lathe(cfg, conn, JsonState(str(tmp_path / "s.json")))
+    assert bot.conn.filling_mode == "FOK"
+    assert bot.conn.deviation == 35
+
+
+def test_auto_filling_follows_what_the_symbol_allows(conn, market):
+    import fake_mt5
+    market.closed_prices = [1.1000]
+    conn.filling_mode = "auto"
+    for mask, expected in ((2, fake_mt5.ORDER_FILLING_IOC),
+                           (1, fake_mt5.ORDER_FILLING_FOK),
+                           (0, fake_mt5.ORDER_FILLING_RETURN)):
+        market.filling_mask = mask
+        market.orders.clear()
+        conn._selected.clear()
+        conn.market_order("EURUSD", 0.1, "buy", sl_price=1.09, tp_price=1.12)
+        assert market.orders[0]["type_filling"] == expected

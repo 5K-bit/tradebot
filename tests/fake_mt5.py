@@ -14,6 +14,8 @@ import numpy as np
 TIMEFRAME_M1, TIMEFRAME_M5, TIMEFRAME_M15 = 1, 5, 15
 TIMEFRAME_M30, TIMEFRAME_H1, TIMEFRAME_H4, TIMEFRAME_D1 = 30, 16385, 16388, 16408
 ORDER_TYPE_BUY, ORDER_TYPE_SELL = 0, 1
+ORDER_FILLING_FOK = 0
+ORDER_FILLING_RETURN = 2
 ORDER_TYPE_BUY_STOP, ORDER_TYPE_SELL_STOP = 4, 5
 TRADE_ACTION_DEAL = 1
 TRADE_ACTION_SLTP = 2
@@ -78,6 +80,11 @@ class Market:
         self.ohlc = {}            # timeframe -> a full rates array
         self.deals = {}           # ticket -> realised profit
         self.pending = []         # working orders
+        self.symbol_names = ["EURUSD", "USDJPY", "GBPUSD", "XAUUSD"]
+        self.filling_mask = 2     # 1=FOK, 2=IOC
+        self.order_check_retcode = 0
+        self.pending_check_retcode = 0
+        self.trade_allowed = True
 
     def set_series(self, timeframe, prices, forming=None):
         """Give one timeframe its own candle series."""
@@ -125,7 +132,8 @@ def shutdown():
 
 
 def terminal_info():
-    return Obj(name="fake") if MARKET.terminal_up else None
+    return (Obj(name="fake", trade_allowed=MARKET.trade_allowed)
+            if MARKET.terminal_up else None)
 
 
 def account_info():
@@ -141,14 +149,28 @@ def symbol_select(symbol, enable=True):
     return True
 
 
+def symbols_get(*args, **kwargs):
+    return tuple(Obj(name=n) for n in MARKET.symbol_names)
+
+
+def order_check(request):
+    pending = request.get("action") == TRADE_ACTION_PENDING
+    code = MARKET.pending_check_retcode if pending else MARKET.order_check_retcode
+    return Obj(retcode=code, comment="ok" if code == 0 else "rejected",
+               request=request)
+
+
 def symbol_info(symbol):
     return Obj(digits=3 if symbol.endswith("JPY") else 5,
-               volume_min=0.01, volume_step=0.01, volume_max=100.0, point=0.00001)
+               volume_min=0.01, volume_step=0.01, volume_max=100.0, point=0.00001,
+               filling_mode=MARKET.filling_mask, trade_mode=4,
+               trade_stops_level=0)
 
 
 def symbol_info_tick(symbol):
     mid = MARKET.price()
-    return Obj(bid=mid - MARKET.spread / 2, ask=mid + MARKET.spread / 2, last=mid)
+    return Obj(bid=mid - MARKET.spread / 2, ask=mid + MARKET.spread / 2, last=mid,
+               time=int(MARKET.now_ts))
 
 
 def copy_rates_from_pos(symbol, timeframe, start_pos, count):

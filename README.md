@@ -137,6 +137,66 @@ unless you intend to reset the daily loss limit.
 **Ctrl+C stops the loop but does not close open positions** — check MT5
 directly before walking away.
 
+## Connecting to MT5
+
+The `MetaTrader5` package talks to a *running* MT5 terminal on the same
+machine. There is no API key and no remote endpoint — if the terminal is closed,
+nothing works.
+
+1. **Install the MT5 terminal** from your broker and log into a **demo**
+   account. (File → Open an Account, or your broker's demo signup.)
+2. **Enable algorithmic trading** — the `Algo Trading` button in the toolbar,
+   or Tools → Options → Expert Advisors → *Allow algorithmic trading*.
+   Without this every order is rejected.
+3. **Open an H1, M15 and M5 chart** for each symbol and scroll back a few
+   hundred bars. MT5 downloads history lazily; the indicators need ~400 bars
+   and will otherwise see nothing.
+4. `pip install -r requirements.txt` in the same Python the bot runs under.
+5. Set the credentials as environment variables — never in the config file:
+
+   ```
+   setx MT5_LOGIN "12345678"
+   setx MT5_PASSWORD "your-demo-password"
+   setx MT5_SERVER "YourBroker-Demo01"
+   ```
+
+   The server name must match the terminal exactly; copy it from the login
+   dialog. Open a new terminal window after `setx` so it picks the values up.
+
+6. **Run the preflight check before the bot:**
+
+   ```bash
+   python3 preflight.py
+   ```
+
+   It sends no orders — order validity is probed with MT5's `order_check()`,
+   which asks the broker whether a request *would* be accepted. It reports the
+   things that differ between brokers and that no test against a fake terminal
+   can tell you:
+
+   - whether the account is demo or real
+   - what your symbols are actually called (`EURUSD`, `EURUSD.raw`, `EURUSDm`…)
+   - which order filling modes the broker accepts
+   - whether pending stop orders with an expiry are accepted — the bot enters
+     with these, so a broker that refuses them breaks every entry
+   - the server's UTC offset, for `broker.utc_offset_hours`
+   - current spreads, and a suggested `max_spread_pips`
+   - whether enough history is loaded
+
+   It exits non-zero if anything is blocking, and prints the config values to
+   set. Run it again during 22:00–06:00 New York: spreads widen overnight, and
+   that is the only window this bot trades in.
+
+7. **Run the bot.** It ships in PAPER, so it decides and logs but sends
+   nothing:
+
+   ```bash
+   python3 trader.py
+   ```
+
+   Watch `lathe_rejections.jsonl`. A quiet session is still informative — it
+   tells you which gate is holding, and whether that is what you intended.
+
 ## Configuration
 
 `config.yaml` is grouped by concern; the engine wants flat values.

@@ -63,6 +63,8 @@ class Normalised:
     decision_log: str | None
     rejection_log: str | None
     state_path: str
+    filling_mode: str
+    deviation_points: int
 
     @property
     def setup_seconds(self) -> int:
@@ -116,6 +118,8 @@ def normalise(cfg: dict) -> Normalised:
         rejection_log=(_get(cfg, "logging.rejection_log.path")
                        if _get(cfg, "logging.rejection_log.enabled", True) else None),
         state_path=_first(cfg, ["state.path"], ".lathe_state.json"),
+        filling_mode=str(_first(cfg, ["execution.filling_mode"], "auto")),
+        deviation_points=int(_first(cfg, ["execution.max_slippage_points"], 20)),
     )
 
 

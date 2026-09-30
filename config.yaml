@@ -432,16 +432,22 @@ position_management:
 # ------------------------------------------------------------
 # EXECUTION
 # ------------------------------------------------------------
-# NOT YET WIRED. These document intent; the engine does not read them.
-# Price and spread validation ARE enforced (see the spread filter and stop
-# validation), but max_slippage_points does not reach the order, and there is
-# no explicit duplicate-order check beyond the one-position cap and the
-# per-candle cursor.
 execution:
+  # Brokers differ on which order filling modes they accept, and one that
+  # refuses the mode we send rejects EVERY order. "auto" asks each symbol what
+  # it allows (preferring IOC, then FOK, then RETURN). Run preflight.py to see
+  # what your broker reports before overriding this.
+  filling_mode: auto            # auto | IOC | FOK | RETURN
+
+  max_slippage_points: 20       # sent as the order deviation
+
+  # NOT YET WIRED — these document intent; the engine does not read them.
+  # Price and spread validation ARE enforced, via the spread filter and stop
+  # validation. There is no explicit duplicate-order check beyond the
+  # one-position cap and the per-candle cursor.
   require_price_validation: true
   require_spread_validation: true
   require_slippage_validation: true
-  max_slippage_points: 20
   retry_failed_order: false
   duplicate_order_protection: true
 

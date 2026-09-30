@@ -55,6 +55,7 @@ class SymbolLimits:
     volume_min: float
     volume_step: float
     volume_max: float
+    filling_mode: int = 0        # broker bitmask: 1 = FOK, 2 = IOC
 
 
 class MT5Connector:
@@ -69,6 +70,11 @@ class MT5Connector:
         # than in the caller so there is exactly one place an order can escape.
         self.dry_run = False
         self._paper_ticket = 900_000
+        # Brokers differ on which filling modes they accept, and one that
+        # refuses the mode we send rejects every order. "auto" asks the symbol
+        # what it allows; preflight.py reports the same thing up front.
+        self.filling_mode = "auto"
+        self.deviation = 20
 
     def connect(self, quiet: bool = False) -> None:
         init_kwargs = {}
@@ -161,6 +167,7 @@ class MT5Connector:
             volume_min=info.volume_min,
             volume_step=info.volume_step,
             volume_max=info.volume_max,
+            filling_mode=getattr(info, "filling_mode", 0),
         )
 
     def get_candles(self, symbol: str, timeframe: int, count: int = 200):
@@ -195,7 +202,7 @@ class MT5Connector:
 
     def market_order(self, symbol: str, volume: float, direction: str,
                       sl_price: float | None = None, tp_price: float | None = None,
-                      deviation: int = 20, comment: str = "lathe"):
+                      deviation: int | None = None, comment: str = "lathe"):
         """direction: 'buy' or 'sell'. volume in lots. sl/tp as absolute prices."""
         limits = self.symbol_limits(symbol)
 
@@ -209,11 +216,11 @@ class MT5Connector:
             "volume": volume,
             "type": order_type,
             "price": price,
-            "deviation": deviation,
+            "deviation": self.deviation if deviation is None else deviation,
             "magic": MAGIC,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_for(limits),
         }
         # `is not None`, not truthiness: a legitimate price is never 0, but a
         # silently dropped stop-loss is the one failure this bot must not have.
@@ -232,6 +239,20 @@ class MT5Connector:
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             raise RuntimeError(f"order_send failed: retcode={result.retcode} comment={result.comment}")
         return result
+
+    def _filling_for(self, limits: SymbolLimits) -> int:
+        """Resolve the configured filling mode against what the symbol allows."""
+        named = {"FOK": mt5.ORDER_FILLING_FOK, "IOC": mt5.ORDER_FILLING_IOC,
+                 "RETURN": mt5.ORDER_FILLING_RETURN}
+        wanted = str(self.filling_mode).upper()
+        if wanted in named:
+            return named[wanted]
+        # auto: prefer IOC, fall back to FOK, then RETURN.
+        if limits.filling_mode & 2:
+            return mt5.ORDER_FILLING_IOC
+        if limits.filling_mode & 1:
+            return mt5.ORDER_FILLING_FOK
+        return mt5.ORDER_FILLING_RETURN
 
     def _simulated(self, kind: str, symbol: str, volume: float, price: float,
                    sl: float = 0.0, tp: float = 0.0):
@@ -266,7 +287,7 @@ class MT5Connector:
             "tp": round(tp_price, limits.digits),
             "magic": MAGIC,
             "comment": comment,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_for(limits),
         }
         if expires_at:
             request["type_time"] = mt5.ORDER_TIME_SPECIFIED
@@ -340,7 +361,7 @@ class MT5Connector:
             raise RuntimeError(f"modify_stop failed: retcode={result.retcode} comment={result.comment}")
         return result
 
-    def close_position(self, position, deviation: int = 20):
+    def close_position(self, position, deviation: int | None = None):
         if position.magic != MAGIC:
             # Belt and braces: open_positions() already filters, but this is
             # the call that actually spends money on someone else's trade.
@@ -367,11 +388,11 @@ class MT5Connector:
             "type": order_type,
             "position": position.ticket,
             "price": price,
-            "deviation": deviation,
+            "deviation": self.deviation if deviation is None else deviation,
             "magic": MAGIC,
             "comment": "lathe-close",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_for(self.symbol_limits(symbol)),
         }
         if self.dry_run:
             return self._simulated("CLOSE", symbol, volume, price)

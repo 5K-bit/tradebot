@@ -326,3 +326,19 @@ def test_breakout_precedence_is_wired():
     cfg = grouped()
     cfg["regime"]["breakout"]["precedence"] = "before"
     assert cs.regime_config(cfg).breakout_precedence == "before"
+
+
+def test_filling_mode_defaults_to_auto():
+    assert cs.normalise(grouped()).filling_mode == "auto"
+
+
+def test_filling_mode_can_be_pinned():
+    cfg = grouped()
+    cfg["execution"] = {"filling_mode": "FOK"}
+    assert cs.normalise(cfg).filling_mode == "FOK"
+
+
+def test_slippage_points_reach_the_config():
+    cfg = grouped()
+    cfg["execution"] = {"max_slippage_points": 35}
+    assert cs.normalise(cfg).deviation_points == 35

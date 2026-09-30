@@ -153,6 +153,8 @@ class Lathe:
         self.mode = schema.effective_mode(self.norm)
         # One place an order can escape, and it is shut unless the mode is LIVE.
         self.conn.dry_run = self.mode != schema.MODE_LIVE
+        self.conn.filling_mode = self.norm.filling_mode
+        self.conn.deviation = self.norm.deviation_points
 
         self.session = sessions.from_config(cfg)
         self.regime_cfg = schema.regime_config(cfg)
