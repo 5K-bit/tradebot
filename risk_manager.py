@@ -43,7 +43,7 @@ class RiskManager:
 
         if self._halted:
             print(
-                f"[risk] restored HALTED state for {self._day} from disk — "
+                f"[risk] restored HALTED state for {self._day} from disk - "
                 f"no new trades until the broker day rolls over."
             )
 
@@ -97,7 +97,7 @@ class RiskManager:
         risk_amount = equity * self.config.risk_per_trade_pct
         stop_distance_pips = abs(entry_price - stop_price) / pip_size
         if stop_distance_pips <= 0:
-            raise ValueError("Stop distance must be > 0 — a stop-loss is required for every trade.")
+            raise ValueError("Stop distance must be > 0 - a stop-loss is required for every trade.")
 
         lots = risk_amount / (stop_distance_pips * pip_value_per_lot)
 
@@ -115,7 +115,7 @@ class RiskManager:
 
         if lots < volume_min or lots <= 0:
             raise ValueError(
-                f"Calculated position size {lots} is below the broker minimum {volume_min} — "
+                f"Calculated position size {lots} is below the broker minimum {volume_min} - "
                 f"risking {self.config.risk_per_trade_pct:.2%} of {equity:.2f} over a "
                 f"{stop_distance_pips:.1f} pip stop is too small to trade. "
                 f"Widen the stop, raise risk_per_trade_pct, or drop this symbol."

@@ -188,11 +188,11 @@ def check_safety(cfg: dict, norm: Normalised) -> list:
 
 def describe_mode(norm: Normalised) -> str:
     if norm.mode == MODE_LIVE and norm.live_enabled:
-        return "LIVE — orders go to the broker with real money"
+        return "LIVE - orders go to the broker with real money"
     if norm.mode == MODE_LIVE:
-        return ("LIVE requested but safety.live_trading_enabled is not true — "
+        return ("LIVE requested but safety.live_trading_enabled is not true - "
                 "running in PAPER")
-    return f"{norm.mode} — no orders are sent to the broker"
+    return f"{norm.mode} - no orders are sent to the broker"
 
 
 def effective_mode(norm: Normalised) -> str:

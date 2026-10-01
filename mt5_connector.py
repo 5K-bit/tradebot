@@ -179,7 +179,7 @@ class MT5Connector:
         if self.is_connected():
             return True
 
-        print("[mt5] connection to terminal lost — attempting to reconnect…")
+        print("[mt5] connection to terminal lost - attempting to reconnect…")
         for attempt, delay in enumerate(RECONNECT_BACKOFF_SECONDS, start=1):
             try:
                 mt5.shutdown()
@@ -190,7 +190,7 @@ class MT5Connector:
                 print(f"[mt5] reconnected after {attempt} attempt(s).")
                 return True
             except Exception as e:
-                print(f"[mt5] reconnect attempt {attempt} failed: {e} — retrying in {delay}s")
+                print(f"[mt5] reconnect attempt {attempt} failed: {e} - retrying in {delay}s")
                 time.sleep(delay)
         print("[mt5] reconnect failed; will try again next cycle.")
         return False
@@ -317,7 +317,7 @@ class MT5Connector:
         """A result object shaped like a real one, with nothing sent."""
         self._paper_ticket += 1
         print(f"[paper] {kind} {symbol} vol={volume} price={price} "
-              f"sl={sl} tp={tp} — simulated, nothing sent to the broker")
+              f"sl={sl} tp={tp} - simulated, nothing sent to the broker")
         return _Result(retcode=mt5.TRADE_RETCODE_DONE, price=price, volume=volume,
                        order=self._paper_ticket, deal=self._paper_ticket,
                        comment="paper")
