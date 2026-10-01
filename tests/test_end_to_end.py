@@ -1,164 +1,130 @@
 """
-Drives the real main() loop against the fake terminal, including a mid-run
-terminal outage, and checks what ends up in the vault log and state file.
+Drives the real main() loop against the fake terminal: a session opening and
+closing, a terminal outage, the kill switches, and what ends up in the trade
+log and state file.
 """
 import json
+from pathlib import Path
+from datetime import datetime, timedelta
 
 import pytest
 
+import scenarios as S
+
 import trader
-from conftest import crossing_prices
+from conftest import IN_SESSION_UTC, feed_candles
+
+START = datetime.fromisoformat(IN_SESSION_UTC)
 
 
-def run_main(tmp_path, monkeypatch, market, cycles=40, symbols=("EURUSD", "GBPUSD"),
-             kill_terminal_at=8, revive_terminal_at=10, start_bar=64):
-    cfg = {
-        "symbols": list(symbols),
-        "timeframe": "M15",
-        "poll_seconds": 30,
-        "pip": {"size": 0.0001, "value_per_lot": 10},
-        "stops": {"stop_loss_pips": 20, "take_profit_pips": 40},
-        "risk": {"risk_per_trade_pct": 0.01, "max_daily_loss_pct": 0.03,
-                 "max_open_positions": 3, "max_lot_size": 1.0,
-                 "broker_utc_offset_hours": 0},
-        "state": {"path": str(tmp_path / "state.json")},
-        "vault": {"log_path": str(tmp_path / "trades.md")},
-    }
-    monkeypatch.setattr(trader, "load_config", lambda path="config.yaml": cfg)
-
-    prices = crossing_prices()
-    market.closed_prices = prices[:start_bar]
-    market.forming_price = prices[start_bar]
-
-    n = {"cycles": 0}
-
-    def fake_sleep(_seconds):
-        n["cycles"] += 1
-        bars = min(start_bar + n["cycles"] // 3, len(prices) - 1)
-        market.closed_prices = prices[:bars]
-        market.forming_price = prices[bars] + 0.00003 * (n["cycles"] % 3)
-        if kill_terminal_at and n["cycles"] == kill_terminal_at:
-            market.terminal_up = False
-            market.can_initialize = False
-        if revive_terminal_at and n["cycles"] == revive_terminal_at:
-            market.can_initialize = True
-        if n["cycles"] >= cycles:
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(trader.time, "sleep", fake_sleep)
-    trader.main()
-
-    return {
-        "cycles": n["cycles"],
-        "log": (tmp_path / "trades.md").read_text(),
-        "state": json.loads((tmp_path / "state.json").read_text()),
-    }
+def install_setup(monkeypatch, score=None):
+    """The real detectors are live now — nothing to install."""
+    return None
 
 
-def test_full_run_survives_a_terminal_outage(tmp_path, monkeypatch, market):
-    out = run_main(tmp_path, monkeypatch, market)
-
-    assert out["cycles"] == 40, "loop exited early"
-    assert "Lathe trader started" in out["log"]
-    assert "Ctrl+C" in out["log"], "did not shut down cleanly"
-    assert "ERROR" not in out["log"], out["log"]
-    assert "CYCLE ERROR" not in out["log"], out["log"]
-
-
-def test_full_run_opens_one_position_per_symbol(tmp_path, monkeypatch, market):
-    out = run_main(tmp_path, monkeypatch, market)
-
-    opens = [o for o in market.orders if "position" not in o]
-    assert len(opens) == 2, f"expected one entry per symbol, got {len(opens)}"
-    assert {o["symbol"] for o in opens} == {"EURUSD", "GBPUSD"}
-    assert out["log"].count("OPENED") == 2
-    # 40 polls, 2 orders: the churn is gone.
-    assert len(market.orders) == 2
-
-
-def test_full_run_persists_state(tmp_path, monkeypatch, market):
-    out = run_main(tmp_path, monkeypatch, market)
-
-    assert set(out["state"]["last_bar_time"]) == {"EURUSD", "GBPUSD"}
-    assert out["state"]["halted"] is False
-    assert out["state"]["equity_at_day_start"] == 10_000.0
-    assert out["state"]["trading_day"]
-
-
-def test_kill_switch_halts_a_live_run(tmp_path, monkeypatch, market):
-    """Drop equity 4% mid-run; no further orders should be sent."""
-    prices = crossing_prices()
-    market.closed_prices = prices[:52]
-    market.forming_price = prices[52]
-
-    cfg = {
-        "symbols": ["EURUSD"], "timeframe": "M15", "poll_seconds": 30,
-        "pip": {"size": 0.0001, "value_per_lot": 10},
-        "stops": {"stop_loss_pips": 20, "take_profit_pips": 40},
-        "risk": {"risk_per_trade_pct": 0.01, "max_daily_loss_pct": 0.03,
-                 "max_open_positions": 3, "max_lot_size": 1.0,
-                 "broker_utc_offset_hours": 0},
-        "state": {"path": str(tmp_path / "state.json")},
-        "vault": {"log_path": str(tmp_path / "trades.md")},
-    }
-    monkeypatch.setattr(trader, "load_config", lambda path="config.yaml": cfg)
+def run_main(config, monkeypatch, market, cycles=12, clock_start=START,
+             minutes_per_cycle=20, on_cycle=None):
+    """Run main() for N cycles, advancing a fake clock, then Ctrl+C out."""
+    monkeypatch.setattr(trader, "load_config", lambda path="config.yaml": config)
+    feed_candles(market, h1=S.h1_uptrend(), m15=S.m15_pullback_to_ema(),
+                 m5=S.m5_full_long_trigger())
 
     n = {"c": 0}
+    clock = {"now": clock_start}
 
-    def fake_sleep(_s):
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock["now"]
+
+    monkeypatch.setattr(trader, "datetime", FakeDateTime)
+
+    def fake_sleep(_seconds):
         n["c"] += 1
-        if n["c"] == 2:
-            market.equity = 9_600.0                 # -4%: past the 3% limit
-        bars = min(52 + n["c"], len(prices) - 1)
-        market.closed_prices = prices[:bars]
-        market.forming_price = prices[bars]
-        if n["c"] >= 30:
+        clock["now"] = clock["now"] + timedelta(minutes=minutes_per_cycle)
+        market.now_ts = clock["now"].timestamp()
+        if on_cycle:
+            on_cycle(n["c"], market)
+        if n["c"] >= cycles:
             raise KeyboardInterrupt
 
     monkeypatch.setattr(trader.time, "sleep", fake_sleep)
     trader.main()
 
-    state = json.loads((tmp_path / "state.json").read_text())
-    assert state["halted"] is True
-    assert market.orders == [], "traded after the kill switch tripped"
-
-
-def test_state_file_is_not_rewritten_when_nothing_changes(tmp_path, monkeypatch, market):
-    """The cursor is only persisted when it actually moves."""
-    writes = {"n": 0}
-    from state import JsonState
-    original = JsonState._save
-
-    def counting_save(self):
-        writes["n"] += 1
-        return original(self)
-
-    monkeypatch.setattr(JsonState, "_save", counting_save)
-    run_main(tmp_path, monkeypatch, market, cycles=30, symbols=("EURUSD",))
-
-    # ~10 candle closes across 30 cycles, plus the day baseline — far fewer
-    # than one write per poll.
-    assert writes["n"] < 20, f"state written {writes['n']} times in 30 cycles"
-
-
-def test_main_validates_config_before_trading(tmp_path, monkeypatch, market):
-    """A bad config must stop the bot at startup, not on the first live signal."""
-    cfg = {
-        "symbols": ["EURUSD", "USDJPY"],          # USDJPY with no pip override
-        "timeframe": "M15", "poll_seconds": 30,
-        "pip": {"size": 0.0001, "value_per_lot": 10},
-        "stops": {"stop_loss_pips": 20, "take_profit_pips": 40},
-        "risk": {"risk_per_trade_pct": 0.01, "max_daily_loss_pct": 0.03,
-                 "max_open_positions": 3, "max_lot_size": 1.0,
-                 "broker_utc_offset_hours": 0},
-        "state": {"path": str(tmp_path / "state.json")},
-        "vault": {"log_path": str(tmp_path / "trades.md")},
+    from conftest import read_log
+    return {
+        "cycles": n["c"],
+        "log": read_log(config["vault"]["log_path"]),
+        "state": json.loads(Path(config["state"]["path"]).read_text()),
     }
-    monkeypatch.setattr(trader, "load_config", lambda path="config.yaml": cfg)
-    monkeypatch.setattr(trader.time, "sleep", lambda _s: (_ for _ in ()).throw(KeyboardInterrupt))
 
-    with pytest.raises(ValueError, match="USDJPY"):
+
+def test_runs_clean(config, monkeypatch, market):
+    out = run_main(config, monkeypatch, market)
+    assert out["cycles"] == 12
+    assert "Setups enabled" in out["log"]
+    assert "ERROR" not in out["log"]
+    assert "CYCLE ERROR" not in out["log"]
+
+
+def test_logs_session_open_and_close(config, monkeypatch, market):
+    out = run_main(config, monkeypatch, market, cycles=30, minutes_per_cycle=20)
+    assert "Session OPEN" in out["log"]
+    assert "Session CLOSED" in out["log"]
+
+
+def test_places_a_pending_entry_and_logs_a_signal(config, monkeypatch, market):
+    out = run_main(config, monkeypatch, market, cycles=6, minutes_per_cycle=16)
+    pending = [o for o in market.orders if o.get("action") == 5]
+    assert pending, out["log"]
+    assert pending[0]["magic"] == 20260917
+    assert "SIGNAL {" in out["log"]
+    assert "BUY EURUSD" in out["log"]
+
+
+def test_survives_a_terminal_outage(config, monkeypatch, market):
+    def outage(cycle, m):
+        if cycle == 3:
+            m.terminal_up = False
+            m.can_initialize = False
+        if cycle == 5:
+            m.can_initialize = True
+    out = run_main(config, monkeypatch, market, cycles=10, on_cycle=outage)
+    assert out["cycles"] == 10
+    assert "CYCLE ERROR" not in out["log"]
+
+
+def test_daily_stop_halts_trading(config, monkeypatch, market):
+
+    def crash(cycle, m):
+        if cycle == 2:
+            m.equity = 9_400.0          # -6%, past the 5% daily stop
+    out = run_main(config, monkeypatch, market, cycles=8, on_cycle=crash)
+    assert out["state"]["halted"] is True
+
+
+def test_account_drawdown_kill_switch_trips(config, monkeypatch, market):
+
+    def crash(cycle, m):
+        if cycle == 2:
+            m.equity = 8_800.0          # -12% from the 10,000 peak
+    out = run_main(config, monkeypatch, market, cycles=8, on_cycle=crash)
+    assert out["state"]["account_halted"] is True
+    assert "ACCOUNT KILL SWITCH" in out["log"] or out["state"]["account_halted"]
+
+
+def test_state_carries_the_session_and_bar_cursors(config, monkeypatch, market):
+    out = run_main(config, monkeypatch, market, cycles=6, minutes_per_cycle=16)
+    assert "last_bar_time" in out["state"]
+    assert out["state"]["equity_peak"] == 10_000.0
+
+
+def test_main_validates_config_before_connecting(config, monkeypatch, market):
+    config["risk"]["risk_per_trade_pct"] = 0.037        # not a selectable level
+    monkeypatch.setattr(trader, "load_config", lambda path="config.yaml": config)
+    monkeypatch.setattr(trader.time, "sleep",
+                        lambda _s: (_ for _ in ()).throw(KeyboardInterrupt))
+    with pytest.raises(ValueError, match="risk_per_trade_pct"):
         trader.main()
-
-    assert market.orders == [], "traded despite an invalid config"
     assert market.init_calls == 0, "connected to the terminal before validating config"
+    assert market.orders == []

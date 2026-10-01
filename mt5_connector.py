@@ -30,6 +30,16 @@ RECONNECT_BACKOFF_SECONDS = (2, 4, 8, 16, 32)
 
 
 @dataclass
+class _Result:
+    retcode: int
+    price: float
+    volume: float
+    order: int
+    deal: int
+    comment: str
+
+
+@dataclass
 class AccountInfo:
     login: int
     balance: float
@@ -45,6 +55,7 @@ class SymbolLimits:
     volume_min: float
     volume_step: float
     volume_max: float
+    filling_mode: int = 0        # broker bitmask: 1 = FOK, 2 = IOC
 
 
 class MT5Connector:
@@ -54,6 +65,16 @@ class MT5Connector:
         self.server = os.environ["MT5_SERVER"]
         self.path = os.environ.get("MT5_PATH")  # optional
         self._selected: set[str] = set()
+        # In PAPER/BACKTEST the connector still reads prices and account state,
+        # but every order-sending call is simulated. The guard lives here rather
+        # than in the caller so there is exactly one place an order can escape.
+        self.dry_run = False
+        self._paper_ticket = 900_000
+        # Brokers differ on which filling modes they accept, and one that
+        # refuses the mode we send rejects every order. "auto" asks the symbol
+        # what it allows; preflight.py reports the same thing up front.
+        self.filling_mode = "auto"
+        self.deviation = 20
 
     def connect(self, quiet: bool = False) -> None:
         init_kwargs = {}
@@ -146,6 +167,7 @@ class MT5Connector:
             volume_min=info.volume_min,
             volume_step=info.volume_step,
             volume_max=info.volume_max,
+            filling_mode=getattr(info, "filling_mode", 0),
         )
 
     def get_candles(self, symbol: str, timeframe: int, count: int = 200):
@@ -180,7 +202,7 @@ class MT5Connector:
 
     def market_order(self, symbol: str, volume: float, direction: str,
                       sl_price: float | None = None, tp_price: float | None = None,
-                      deviation: int = 20, comment: str = "lathe"):
+                      deviation: int | None = None, comment: str = "lathe"):
         """direction: 'buy' or 'sell'. volume in lots. sl/tp as absolute prices."""
         limits = self.symbol_limits(symbol)
 
@@ -194,11 +216,11 @@ class MT5Connector:
             "volume": volume,
             "type": order_type,
             "price": price,
-            "deviation": deviation,
+            "deviation": self.deviation if deviation is None else deviation,
             "magic": MAGIC,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_for(limits),
         }
         # `is not None`, not truthiness: a legitimate price is never 0, but a
         # silently dropped stop-loss is the one failure this bot must not have.
@@ -207,6 +229,10 @@ class MT5Connector:
         if tp_price is not None:
             request["tp"] = round(tp_price, limits.digits)
 
+        if self.dry_run:
+            return self._simulated("MARKET", symbol, volume, price,
+                                   request.get("sl", 0.0), request.get("tp", 0.0))
+
         result = mt5.order_send(request)
         if result is None:
             raise RuntimeError(f"order_send({symbol}) returned None: {mt5.last_error()}")
@@ -214,7 +240,128 @@ class MT5Connector:
             raise RuntimeError(f"order_send failed: retcode={result.retcode} comment={result.comment}")
         return result
 
-    def close_position(self, position, deviation: int = 20):
+    def _filling_for(self, limits: SymbolLimits) -> int:
+        """Resolve the configured filling mode against what the symbol allows."""
+        named = {"FOK": mt5.ORDER_FILLING_FOK, "IOC": mt5.ORDER_FILLING_IOC,
+                 "RETURN": mt5.ORDER_FILLING_RETURN}
+        wanted = str(self.filling_mode).upper()
+        if wanted in named:
+            return named[wanted]
+        # auto: prefer IOC, fall back to FOK, then RETURN.
+        if limits.filling_mode & 2:
+            return mt5.ORDER_FILLING_IOC
+        if limits.filling_mode & 1:
+            return mt5.ORDER_FILLING_FOK
+        return mt5.ORDER_FILLING_RETURN
+
+    def _simulated(self, kind: str, symbol: str, volume: float, price: float,
+                   sl: float = 0.0, tp: float = 0.0):
+        """A result object shaped like a real one, with nothing sent."""
+        self._paper_ticket += 1
+        print(f"[paper] {kind} {symbol} vol={volume} price={price} "
+              f"sl={sl} tp={tp} — simulated, nothing sent to the broker")
+        return _Result(retcode=mt5.TRADE_RETCODE_DONE, price=price, volume=volume,
+                       order=self._paper_ticket, deal=self._paper_ticket,
+                       comment="paper")
+
+    def pending_stop_order(self, symbol: str, volume: float, direction: str,
+                           entry_price: float, sl_price: float, tp_price: float,
+                           expires_at: int | None = None, comment: str = "lathe"):
+        """
+        Place a stop-entry order beyond the current price.
+
+        The strategy enters above the trigger candle's high (or below its low),
+        which is a BUY_STOP / SELL_STOP, not a market order — and it expires if
+        price does not reach it within the retest window.
+        """
+        limits = self.symbol_limits(symbol)
+        order_type = mt5.ORDER_TYPE_BUY_STOP if direction == "buy" else mt5.ORDER_TYPE_SELL_STOP
+
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": symbol,
+            "volume": volume,
+            "type": order_type,
+            "price": round(entry_price, limits.digits),
+            "sl": round(sl_price, limits.digits),
+            "tp": round(tp_price, limits.digits),
+            "magic": MAGIC,
+            "comment": comment,
+            "type_filling": self._filling_for(limits),
+        }
+        if expires_at:
+            request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+            request["expiration"] = int(expires_at)
+        else:
+            request["type_time"] = mt5.ORDER_TIME_GTC
+
+        if self.dry_run:
+            return self._simulated("PENDING", symbol, volume, request["price"],
+                                   request["sl"], request["tp"])
+
+        result = mt5.order_send(request)
+        if result is None:
+            raise RuntimeError(f"pending_stop_order({symbol}) returned None: {mt5.last_error()}")
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(f"pending order failed: retcode={result.retcode} "
+                               f"comment={result.comment}")
+        return result
+
+    def pending_orders(self, symbol: str | None = None, magic: int | None = MAGIC):
+        """Working orders placed by this bot."""
+        orders = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
+        orders = list(orders) if orders is not None else []
+        if magic is not None:
+            orders = [o for o in orders if getattr(o, "magic", None) == magic]
+        return orders
+
+    def cancel_order(self, order):
+        """Remove a working order — used when its entry window expires."""
+        if getattr(order, "magic", None) != MAGIC:
+            raise RuntimeError(f"refusing to cancel order {order.ticket}: not this bot's")
+        if self.dry_run:
+            return self._simulated("CANCEL", order.symbol, 0.0, 0.0)
+        result = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": order.ticket})
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            code = getattr(result, "retcode", "None")
+            raise RuntimeError(f"cancel_order failed: retcode={code}")
+        return result
+
+    def modify_stop(self, position, new_sl: float, new_tp: float | None = None):
+        """
+        Move an open position's stop-loss (and optionally its target).
+
+        Used by trade management to step the stop to break-even and then trail
+        it. Refuses foreign positions for the same reason close_position does.
+        """
+        if position.magic != MAGIC:
+            raise RuntimeError(
+                f"refusing to modify position {position.ticket} on {position.symbol}: "
+                f"magic={position.magic} is not this bot's ({MAGIC})."
+            )
+        limits = self.symbol_limits(position.symbol)
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": position.symbol,
+            "position": position.ticket,
+            "sl": round(new_sl, limits.digits),
+            "magic": MAGIC,
+        }
+        if new_tp is not None:
+            request["tp"] = round(new_tp, limits.digits)
+
+        if self.dry_run:
+            return self._simulated("MODIFY", position.symbol, position.volume,
+                                   request["sl"])
+
+        result = mt5.order_send(request)
+        if result is None:
+            raise RuntimeError(f"modify_stop({position.symbol}) returned None: {mt5.last_error()}")
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(f"modify_stop failed: retcode={result.retcode} comment={result.comment}")
+        return result
+
+    def close_position(self, position, deviation: int | None = None):
         if position.magic != MAGIC:
             # Belt and braces: open_positions() already filters, but this is
             # the call that actually spends money on someone else's trade.
@@ -241,12 +388,15 @@ class MT5Connector:
             "type": order_type,
             "position": position.ticket,
             "price": price,
-            "deviation": deviation,
+            "deviation": self.deviation if deviation is None else deviation,
             "magic": MAGIC,
             "comment": "lathe-close",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_for(self.symbol_limits(symbol)),
         }
+        if self.dry_run:
+            return self._simulated("CLOSE", symbol, volume, price)
+
         result = mt5.order_send(request)
         if result is None:
             raise RuntimeError(f"close order_send({symbol}) returned None: {mt5.last_error()}")

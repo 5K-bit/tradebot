@@ -1,4 +1,4 @@
- # ============================================================
+# ============================================================
 # LATHE — FOREX TRADING CONFIGURATION
 # Version: v1 Strategy Engine
 # ============================================================
@@ -10,32 +10,28 @@
 #   MT5_PASSWORD
 #   MT5_SERVER
 #
-# Never commit credentials.
-#
 # Strategy:
 #   H1  = market regime / directional bias
 #   M15 = setup formation
 #   M5  = execution trigger
 #
 # Lathe does NOT allow AI/LLM-generated trade entries.
-# Trade decisions must come from deterministic strategy logic.
+# Trade decisions come from deterministic strategy logic only.
+#
+# Markers used below:
+#   SPEC   — taken verbatim from the strategy document
+#   REVIEW — the document does not specify it; this is a default to set
+#            deliberately for your broker
 # ============================================================
-
-
-# ------------------------------------------------------------
-# MARKET
-# ------------------------------------------------------------
 
 symbols:
   - EURUSD
   - USDJPY
 
-
 timeframes:
   regime: H1
   setup: M15
   trigger: M5
-
 
 poll_seconds: 15
 
@@ -43,17 +39,12 @@ poll_seconds: 15
 # ------------------------------------------------------------
 # TRADING SESSION
 # ------------------------------------------------------------
-
 session:
   timezone: "America/New_York"
-
   start: "22:00"
   end: "06:00"
 
-  # Do not open new positions after the session closes.
   allow_entries_after_session: false
-
-  # Existing positions may still be managed according to exit rules.
   manage_existing_positions_after_session: true
 
   max_trades_per_session: 3
@@ -63,49 +54,44 @@ session:
 # ------------------------------------------------------------
 # PIP CONFIGURATION
 # ------------------------------------------------------------
-
 pip:
   default:
     size: 0.0001
     value_per_lot: 10.0
 
   overrides:
-
     USDJPY:
       size: 0.01
-      value_per_lot: 6.7
+      value_per_lot: 6.7    # REVIEW: depends on account currency and rate
 
 
 # ------------------------------------------------------------
 # INDICATORS
 # ------------------------------------------------------------
-
 indicators:
-
   ema:
     fast: 20
     slow: 50
-
   atr:
     period: 14
-
   adx:
     period: 14
-
   rsi:
     period: 14
-
   swing:
-    lookback: 20
+    # Bars required on EACH side of a swing point before it is confirmed.
+    # 2 means 5 bars per swing. Values above ~5 make a higher low
+    # effectively undetectable and stop trend-pullback entries firing;
+    # the bot refuses to start above 5 for that reason.
+    lookback: 2
 
 
 # ------------------------------------------------------------
-# MARKET REGIME ENGINE
+# MARKET REGIME ENGINE  (Rule 1)
 # ------------------------------------------------------------
-
 regime:
-
   enabled: true
+  timeframe: H1
 
   allowed:
     - TREND
@@ -113,105 +99,132 @@ regime:
     - BREAKOUT
     - NO_TRADE
 
-  timeframe: H1
-
   trend:
     use_ema_alignment: true
     use_adx: true
-    minimum_adx: 20
+    minimum_adx: 20                 # SPEC
+    minimum_separation_atr: 0.25    # SPEC (EMA20-EMA50) >= 0.25 x ATR
 
   range:
     use_rsi: true
     use_structure: true
     require_defined_range: true
+    maximum_adx: 18                 # SPEC
+    maximum_separation_atr: 0.20    # SPEC |EMA20-EMA50| <= 0.20 x ATR
 
+  # BREAKOUT is not defined as a regime in Rule 1 of the strategy document.
+  # It is classified here by applying the document's own M15 breakout test to
+  # H1 bars, and is checked AFTER Rule 1 — so it can only classify a bar that
+  # was already unclear, never take one from TREND or RANGE.
+  # Set precedence: before to reverse that.
   breakout:
     require_structure_break: true
     require_retest: true
+    precedence: after
+    lookback_bars: 12               # REVIEW (M15 spec value applied to H1)
+    break_buffer_atr: 0.10          # REVIEW
+    expansion_multiple: 1.20        # REVIEW
+    median_bars: 20                 # REVIEW
+    retest_max_bars: 3              # REVIEW
+    retest_distance_atr: 0.15       # REVIEW
 
-  # When market state cannot be confidently classified,
-  # Lathe must remain flat.
+  # Score band cut-offs. The document gives the bands, not the thresholds.
+  # NOTE: component max_points and classification bands below are fixed in
+  # scoring.py (25/20/20/15/10/10, and 60/80/90). They are recorded here as the
+  # contract; editing them does not change the engine.
+  scoring:
+    strong_adx: 25.0                     # REVIEW
+    strong_separation_atr: 0.50          # REVIEW
+    strong_range_adx: 15.0               # REVIEW
+    strong_range_separation_atr: 0.10    # REVIEW
+
   unknown_regime_action: NO_TRADE
 
 
 # ------------------------------------------------------------
 # STRATEGIES
 # ------------------------------------------------------------
-
 strategies:
 
   trend_pullback:
     enabled: true
-
-    allowed_regimes:
-      - TREND
-
+    allowed_regimes: [TREND]
     bias_timeframe: H1
     setup_timeframe: M15
     trigger_timeframe: M5
-
     require_ema_alignment: true
     require_structure_alignment: true
     require_pullback: true
     require_trigger_confirmation: true
-
-    minimum_rr: 2.0
-
+    minimum_rr: 2.0                 # SPEC
 
   range_reversion:
     enabled: true
-
-    allowed_regimes:
-      - RANGE
-
+    allowed_regimes: [RANGE]
     bias_timeframe: H1
     setup_timeframe: M15
     trigger_timeframe: M5
-
     require_defined_range: true
     require_range_edge_entry: true
     prohibit_midrange_entry: true
     require_trigger_confirmation: true
-
     use_rsi_confirmation: true
-
-    minimum_rr: 1.5
-
+    minimum_rr: 1.5                 # SPEC
 
   breakout_retest:
     enabled: true
-
-    allowed_regimes:
-      - BREAKOUT
-
+    allowed_regimes: [BREAKOUT]
     bias_timeframe: H1
     setup_timeframe: M15
     trigger_timeframe: M5
-
     require_structure_break: true
     require_retest: true
     require_trigger_confirmation: true
-
-    # Avoid entering directly into the breakout candle.
     allow_chasing: false
-
-    minimum_rr: 2.0
+    minimum_rr: 2.0                 # SPEC
 
 
 # ------------------------------------------------------------
-# ENTRY BUFFER
+# SETUP GEOMETRY
 # ------------------------------------------------------------
+setup_params:
+  pullback_structure_atr: 0.25    # SPEC valid pullback distance
+  entry_buffer_atr: 0.05          # SPEC entry beyond the trigger candle
+  stop_buffer_atr: 0.20           # SPEC stop beyond structure
+  trigger_bars: 3                 # SPEC 3-bar M5 break
+  order_expiry_bars: 3            # SPEC cancel if not triggered in 3 M5 candles
+  breakout_lookback: 12           # SPEC
+  breakout_buffer_atr: 0.10       # SPEC
+  breakout_expansion: 1.20        # SPEC
+  breakout_median_bars: 20        # SPEC
+  retest_max_bars: 3              # SPEC
+  retest_distance_atr: 0.15       # SPEC
+  rsi_long_max: 35.0              # SPEC
+  rsi_short_min: 65.0             # SPEC
+  range_zone_pct: 0.20            # SPEC outer 20% of the range
+  range_target_pct: 0.80          # SPEC ~80% toward the far side
+  target_r: 2.0                   # SPEC base target
+  range_lookback: 20              # REVIEW "recent range structure" depth
+  location_excellent: 0.40        # REVIEW location score bands
+  location_good: 0.70
 
+
+# ------------------------------------------------------------
+# ENTRY
+# ------------------------------------------------------------
 entry:
+  # Entries are PENDING STOP ORDERS beyond the trigger candle, per the
+  # strategy document, and expire after order_expiry_bars M5 candles.
+  # This is what makes allow_chasing: false true in practice — a market
+  # order placed after the trigger candle closed would be chasing.
+  order_type: STOP
 
-  # Trigger levels are offset slightly to reduce false touches.
   atr_buffer:
     enabled: true
     timeframe: M5
-    multiplier: 0.05
+    multiplier: 0.05              # SPEC
 
   require_closed_candle: true
-
   allow_chasing: false
 
 
@@ -219,65 +232,27 @@ entry:
 # TRADE SCORE
 # ------------------------------------------------------------
 #
-# Maximum score = 100
+# Six categories, SUMMED, maximum 100.
+# Executes only when total >= 80 AND trigger == 20 AND every hard
+# gate passes. The score never overrides a hard rule.
 #
-# Lathe executes only when:
-#
-#   total score >= 80
-#   trigger score == 20
-#   hard gates pass
-#   RR requirement passes
-#   spread requirement passes
-#   risk engine approves
-#
-# ------------------------------------------------------------
-
 scoring:
-
   enabled: true
-
   maximum_score: 100
 
   components:
-
-    regime:
-      max_points: 25
-
-    structure_location:
-      max_points: 20
-
-    trigger:
-      max_points: 20
-      required_points: 20
-
-    risk_reward:
-      max_points: 15
-
-    execution_quality:
-      max_points: 10
-
-    session_volatility:
-      max_points: 10
-
+    regime:             {max_points: 25}
+    structure_location: {max_points: 20}
+    trigger:            {max_points: 20, required_points: 20}
+    risk_reward:        {max_points: 15}
+    execution_quality:  {max_points: 10}
+    session_volatility: {max_points: 10}
 
   classifications:
-
-    hold:
-      minimum: 0
-      maximum: 59
-
-    watch:
-      minimum: 60
-      maximum: 79
-
-    valid:
-      minimum: 80
-      maximum: 89
-
-    strong:
-      minimum: 90
-      maximum: 100
-
+    hold:   {minimum: 0,  maximum: 59}
+    watch:  {minimum: 60, maximum: 79}
+    valid:  {minimum: 80, maximum: 89}
+    strong: {minimum: 90, maximum: 100}
 
   execution_threshold: 80
 
@@ -285,67 +260,51 @@ scoring:
 # ------------------------------------------------------------
 # HARD ENTRY GATES
 # ------------------------------------------------------------
-
+# These are enforced unconditionally by the engine. They are listed
+# here as the contract; turning one to false does not disable it.
 hard_gates:
-
   require_market_data_healthy: true
   require_broker_connection_healthy: true
-
   require_session_open: true
-
   require_no_existing_position: true
-
   require_trade_count_below_limit: true
-
   require_loss_limit_clear: true
-
   require_drawdown_limit_clear: true
-
   require_spread_filter_pass: true
-
   require_news_filter_pass: true
-
   require_rr_filter_pass: true
-
   require_trigger_confirmation: true
-
-  # Failure of ANY hard gate prevents execution.
   failure_action: REJECT
 
 
 # ------------------------------------------------------------
 # SPREAD FILTER
 # ------------------------------------------------------------
-
 spread:
-
   enabled: true
-
-  # Current spread cannot exceed this multiple
-  # of the recent median spread.
-  max_median_multiplier: 1.5
-
-  median_window: 50
-
-  # Spread relative to current M5 ATR.
-  max_atr_ratio: 0.10
-
+  max_median_multiplier: 1.5      # SPEC spread <= 1.5 x recent median
+  median_window: 50               # REVIEW
+  max_atr_ratio: 0.10             # SPEC spread / ATR_M5 <= 0.10
   reject_abnormal_spread: true
+
+  # Absolute ceiling in pips, independent of the median. Set this from your
+  # broker's ACTUAL 22:00-06:00 spreads, not its advertised typical spread.
+  max_spread_pips: 2.0            # REVIEW
 
 
 # ------------------------------------------------------------
 # NEWS FILTER
 # ------------------------------------------------------------
-
+#
+# WARNING: the MetaTrader5 Python API exposes no economic calendar, so the
+# event list below is NOT automatically enforced. Only the explicit windows
+# in blackout_windows block trading. Anything not listed is NOT blacked out.
+# Automating this needs an external calendar provider.
+#
 news:
-
   enabled: true
 
-  affected_currencies:
-    - USD
-    - EUR
-    - JPY
-
+  affected_currencies: [USD, EUR, JPY]
   minimum_impact: HIGH
 
   blackout_minutes_before: 30
@@ -362,47 +321,30 @@ news:
     - ECB
     - BOJ
 
+  # Entered by hand until a calendar feed is wired in.
+  blackout_windows: []
+  #  - {label: "US CPI", start: "2026-10-13T12:30:00Z"}
+
 
 # ------------------------------------------------------------
 # RISK ENGINE
 # ------------------------------------------------------------
-
 risk:
-
   enabled: true
 
-  # User-selectable operating modes.
   modes:
-
-    conservative:
-      risk_per_trade_pct: 0.005
-
-    normal:
-      risk_per_trade_pct: 0.01
-
-    aggressive:
-      risk_per_trade_pct: 0.02
-
+    conservative: {risk_per_trade_pct: 0.005}
+    normal:       {risk_per_trade_pct: 0.01}
+    aggressive:   {risk_per_trade_pct: 0.02}
 
   default_mode: normal
-
-  # Hard maximum allowed by Lathe.
   maximum_live_risk_pct: 0.02
 
   max_open_positions: 1
   max_trades_per_session: 3
-
   max_lot_size: 1.0
 
-  # Position size is calculated from:
-  #
-  # equity
-  # risk %
-  # stop distance
-  # pip value
-  #
   dynamic_position_sizing: true
-
   martingale: false
   averaging_down: false
 
@@ -410,28 +352,20 @@ risk:
 # ------------------------------------------------------------
 # LOSS PROTECTION
 # ------------------------------------------------------------
-
 loss_protection:
-
   enabled: true
 
-  # Stop trading after two consecutive losses.
   consecutive_loss_limit: 2
-
   stop_session_on_consecutive_loss_limit: true
 
-  # Soft session/daily protection.
   max_session_drawdown_pct: 0.05
-
-  # Emergency account-level kill switch.
   max_rolling_account_drawdown_pct: 0.10
 
   require_manual_reactivation_after_kill_switch: true
 
+  # Only applies when stop_session_on_consecutive_loss_limit is false.
   cooldown_after_loss:
     enabled: true
-
-    # Wait at least one completed M15 candle before another setup.
     candles: 1
     timeframe: M15
 
@@ -439,128 +373,115 @@ loss_protection:
 # ------------------------------------------------------------
 # STOP LOSS
 # ------------------------------------------------------------
-
 stops:
-
   mode: STRUCTURE_ATR
 
   atr:
     enabled: true
     timeframe: M15
     period: 14
+    multiple: 0.5                 # REVIEW pad beyond the structural level
 
   structure:
     enabled: true
     use_recent_swing: true
 
-  # Stop may tighten, but must NEVER be widened after entry.
   allow_stop_widening: false
 
+  # All three apply. The pip floor is additive to the spec rules, not a
+  # replacement: a 3-pip stop still fails if it is under twice the spread.
   minimum_stop_distance_pips: 3
+  minimum_spread_multiple: 2.0    # SPEC stop >= 2 x current spread
+  maximum_atr_multiple: 1.5       # SPEC stop <= 1.5 x ATR_M15
 
 
 # ------------------------------------------------------------
 # TAKE PROFIT
 # ------------------------------------------------------------
-
 targets:
-
   dynamic: true
-
-  trend:
-    minimum_rr: 2.0
-
-  breakout:
-    minimum_rr: 2.0
-
-  range:
-    minimum_rr: 1.5
+  trend:    {minimum_rr: 2.0}
+  breakout: {minimum_rr: 2.0}
+  range:    {minimum_rr: 1.5}
 
 
 # ------------------------------------------------------------
 # POSITION MANAGEMENT
 # ------------------------------------------------------------
-
 position_management:
-
-  evaluate_at_r:
-    - 1.0
-    - 1.5
+  evaluate_at_r: [1.0, 1.5]
 
   break_even:
-
     enabled: true
-
-    # Do not instantly move stops to break-even.
     minimum_r: 1.0
-
+    offset_r: 0.0                 # REVIEW push past entry to cover costs
     require_structure_confirmation: true
 
-
   trailing_stop:
-
     enabled: true
-
     activation_r: 1.5
-
+    distance_r: 1.0               # REVIEW how far behind price the trail sits
     mode: STRUCTURE_ATR
 
-
   partial_profit:
-
     enabled: false
-
-    # Reserved for later optimization/backtesting.
     activation_r: 1.0
     close_fraction: 0.50
 
 
 # ------------------------------------------------------------
-# EXECUTION RULES
+# EXECUTION
 # ------------------------------------------------------------
-
 execution:
+  # Brokers differ on which order filling modes they accept, and one that
+  # refuses the mode we send rejects EVERY order. "auto" asks each symbol what
+  # it allows (preferring IOC, then FOK, then RETURN). Run preflight.py to see
+  # what your broker reports before overriding this.
+  filling_mode: auto            # auto | IOC | FOK | RETURN
 
-  order_type: MARKET
+  max_slippage_points: 20       # sent as the order deviation
 
+  # NOT YET WIRED — these document intent; the engine does not read them.
+  # Price and spread validation ARE enforced, via the spread filter and stop
+  # validation. There is no explicit duplicate-order check beyond the
+  # one-position cap and the per-candle cursor.
   require_price_validation: true
   require_spread_validation: true
   require_slippage_validation: true
-
-  max_slippage_points: 20
-
   retry_failed_order: false
-
   duplicate_order_protection: true
 
 
 # ------------------------------------------------------------
 # DATA QUALITY
 # ------------------------------------------------------------
-
 data:
-
   reject_stale_data: true
 
-  maximum_candle_age_seconds: 120
+  # MUST exceed the setup timeframe. An M15 bar is legitimately up to 900s
+  # old just before the next one closes, so a limit at or below 900 would
+  # reject healthy data for most of every bar. The bot refuses to start
+  # if this is set at or below the setup timeframe.
+  maximum_candle_age_seconds: 1800
 
   require_h1_data: true
   require_m15_data: true
   require_m5_data: true
-
   minimum_history_bars: 250
 
 
 # ------------------------------------------------------------
 # STATE
 # ------------------------------------------------------------
-
 state:
-
   path: ".lathe_state.json"
+  reject_missing_state_during_active_session: true
 
+  # What must survive a restart. The engine persists the risk baseline, halt
+  # and kill-switch flags, session trade count, consecutive losses, spread
+  # window, candle cursor and open-trade metadata. This list is the contract;
+  # the engine does not read it.
   persist:
-
     - session_date
     - session_start_equity
     - trades_this_session
@@ -571,32 +492,26 @@ state:
     - last_processed_candle
     - open_trade_metadata
 
-  # State deletion must never be treated as a normal reset.
-  reject_missing_state_during_active_session: true
-
 
 # ------------------------------------------------------------
 # BROKER
 # ------------------------------------------------------------
-
 broker:
+  utc_offset_hours: 0             # REVIEW your MT5 server timezone
 
-  # Configure this to match the MT5 broker.
-  utc_offset_hours: 0
-
+  # NOT YET WIRED as explicit pre-flight checks. In practice symbol
+  # availability and volume limits are enforced implicitly — the engine
+  # selects each symbol before use and sizes against the broker's
+  # volume_min/step/max. Trade permissions are not checked at all.
   validate_symbol_availability: true
-
   validate_trade_permissions: true
-
   validate_volume_limits: true
 
 
 # ------------------------------------------------------------
 # LOGGING
 # ------------------------------------------------------------
-
 logging:
-
   level: INFO
 
   trade_log:
@@ -622,22 +537,21 @@ logging:
 # ------------------------------------------------------------
 # SAFETY
 # ------------------------------------------------------------
-
 safety:
+  # LIVE needs BOTH of these. default_mode: LIVE on its own still runs
+  # PAPER — the engine degrades rather than trading by accident.
+  default_mode: PAPER
+  live_trading_enabled: false
 
   live_trading_requires_explicit_enable: true
-
-  default_mode: PAPER
-
-  modes:
-    - BACKTEST
-    - PAPER
-    - LIVE
-
   fail_closed: true
 
-  halt_on:
+  # BACKTEST currently behaves exactly like PAPER — decisions are made against
+  # live data and logged, with no orders sent. There is no historical replay
+  # engine, so it does not backtest anything.
+  modes: [BACKTEST, PAPER, LIVE]
 
+  halt_on:
     - broker_disconnect
     - stale_market_data
     - invalid_position_size
@@ -654,15 +568,15 @@ safety:
 #
 # A trade may execute ONLY when:
 #
-# 1. Time is between 22:00–06:00 America/New_York.
-# 2. Symbol is EURUSD or USDJPY.
-# 3. H1 regime has been identified.
-# 4. An approved strategy matches that regime.
-# 5. M15 setup is valid.
-# 6. M5 trigger is confirmed on a CLOSED candle.
-# 7. Trigger component scores 20/20.
-# 8. Total setup score is >= 80/100.
-# 9. Required RR is satisfied.
+#  1. Time is between 22:00-06:00 America/New_York.
+#  2. Symbol is EURUSD or USDJPY.
+#  3. H1 regime has been identified.
+#  4. An approved strategy matches that regime.
+#  5. M15 setup is valid.
+#  6. M5 trigger is confirmed on a CLOSED candle.
+#  7. Trigger component scores 20/20.
+#  8. Total setup score is >= 80/100.
+#  9. Required RR is satisfied.
 # 10. Spread filter passes.
 # 11. News blackout is clear.
 # 12. No Lathe position is already open.
@@ -672,6 +586,7 @@ safety:
 # 16. Rolling account drawdown is below 10%.
 # 17. Position size passes the risk engine.
 # 18. Broker/data health checks pass.
+# 19. Mode is LIVE and live_trading_enabled is true.
 #
 # If ANY mandatory condition fails:
 #
