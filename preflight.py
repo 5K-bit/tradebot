@@ -49,40 +49,119 @@ def header(title):
     print(f"\n{'=' * 66}\n{title}\n{'=' * 66}")
 
 
+def _try_initialize(label, **kwargs):
+    """One initialize() attempt, reported."""
+    if mt5.initialize(**kwargs):
+        return True, None
+    err = mt5.last_error()
+    print(f"    {label}: failed {err}")
+    return False, err
+
+
+def _find_terminals():
+    """Common MT5 install locations, for when the wrong terminal is picked."""
+    import glob
+    roots = [
+        os.path.expandvars(r"%PROGRAMFILES%\\*MetaTrader*\\terminal64.exe"),
+        os.path.expandvars(r"%PROGRAMFILES(X86)%\\*MetaTrader*\\terminal64.exe"),
+        os.path.expandvars(r"%APPDATA%\\MetaQuotes\\Terminal\\*\\terminal64.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\\Programs\\*MetaTrader*\\terminal64.exe"),
+    ]
+    found = []
+    for pattern in roots:
+        try:
+            found.extend(glob.glob(pattern))
+        except Exception:
+            pass
+    return sorted(set(found))
+
+
 def connect():
     header("1. CONNECTION")
-    kwargs = {}
-    if os.environ.get("MT5_PATH"):
-        kwargs["path"] = os.environ["MT5_PATH"]
-    if not mt5.initialize(**kwargs):
-        note(BAD, f"initialize() failed: {mt5.last_error()}")
-        print("\n  Is the MT5 terminal running and logged in on this machine?")
-        return False
 
     login = os.environ.get("MT5_LOGIN")
-    if login:
-        ok = mt5.login(int(login), password=os.environ.get("MT5_PASSWORD", ""),
-                       server=os.environ.get("MT5_SERVER", ""))
-        if not ok:
-            note(BAD, f"login() failed: {mt5.last_error()}")
-            return False
-        note(OK, f"logged in as {login}")
-    else:
-        note(WARN, "MT5_LOGIN not set — using whatever account the terminal has open")
+    password = os.environ.get("MT5_PASSWORD")
+    server = os.environ.get("MT5_SERVER")
+    path = os.environ.get("MT5_PATH")
+
+    print(f"  MT5_LOGIN  {'set (' + login + ')' if login else 'NOT SET'}")
+    print(f"  MT5_SERVER {'set (' + server + ')' if server else 'NOT SET'}")
+    print(f"  MT5_PATH   {path or 'not set (will auto-detect the terminal)'}")
+    print("  attempting to attach to the terminal:")
+
+    # The MetaTrader5 docs recommend passing credentials to initialize() rather
+    # than calling login() afterwards — initialize() alone attaches to whatever
+    # account the terminal has active, and fails with -6 if that account is not
+    # authorised.
+    attempts = []
+    if login and password and server:
+        creds = {"login": int(login), "password": password, "server": server}
+        if path:
+            attempts.append(("with credentials and MT5_PATH", {**creds, "path": path}))
+        attempts.append(("with credentials", creds))
+    if path:
+        attempts.append(("with MT5_PATH only", {"path": path}))
+    attempts.append(("bare, using the terminal's active account", {}))
+
+    connected = False
+    last_err = None
+    for label, kwargs in attempts:
+        connected, last_err = _try_initialize(label, **kwargs)
+        if connected:
+            print(f"    {label}: OK")
+            break
+
+    if not connected:
+        code = last_err[0] if isinstance(last_err, tuple) else None
+        note(BAD, f"could not attach to a MetaTrader 5 terminal: {last_err}")
+        print()
+        if code == -6:
+            print("  -6 is AUTH_FAILED: a terminal was found, but it is not logged in")
+            print("  to an authorised account. Check, in the terminal itself:")
+            print()
+            print("    1. Bottom-right status bar. It must show a ping/traffic figure.")
+            print("       'No Connection' or 'Invalid account' means the terminal is")
+            print("       not logged in, whatever the Navigator panel lists.")
+            print("    2. File > Login to Trade Account, re-enter the DEMO password,")
+            print("       and tick 'Save account information'. The Python API cannot")
+            print("       log in for you if the terminal has no saved password.")
+            print("    3. If MT5_LOGIN/PASSWORD/SERVER are set above, confirm the")
+            print("       server string matches the terminal EXACTLY, including the")
+            print("       suffix (e.g. 'ICMarketsSC-Demo', not 'ICMarkets-Demo').")
+            print("    4. Close the terminal completely and reopen it, then retry.")
+        elif code == -10003:
+            print("  -10003 means the terminal executable could not be found or started.")
+        else:
+            print("  Is the MT5 terminal running and logged in on this machine?")
+
+        installs = _find_terminals()
+        if len(installs) > 1:
+            print()
+            print(f"  {len(installs)} MT5 terminals found. The API may have picked the")
+            print("  wrong one — point it at the right install with MT5_PATH:")
+            for t in installs:
+                print(f"    setx MT5_PATH \"{t}\"")
+        elif installs:
+            print(f"\n  terminal found at: {installs[0]}")
+            print("  If it is not the one you have open, set MT5_PATH to the right one.")
+        return False
 
     term = mt5.terminal_info()
     acct = mt5.account_info()
     if acct is None:
-        note(BAD, f"account_info() returned None: {mt5.last_error()}")
+        note(BAD, f"attached, but account_info() returned None: {mt5.last_error()}")
+        print("\n  The terminal is reachable but has no account loaded. Log it into")
+        print("  your demo account (File > Login to Trade Account) and retry.")
         return False
 
     modes = {0: "DEMO", 1: "CONTEST", 2: "REAL"}
     kind = modes.get(acct.trade_mode, f"unknown({acct.trade_mode})")
     if kind == "REAL":
         note(WARN, f"this is a REAL-MONEY account ({acct.login}). For practice, "
-                   f"log the terminal into a demo account instead.")
+                   f"switch the terminal to your demo account and re-run.")
     else:
-        note(OK, f"{kind} account {acct.login} — {acct.balance} {acct.currency}")
+        note(OK, f"{kind} account {acct.login} — {acct.balance} {acct.currency} "
+                 f"on {getattr(acct, 'server', server or '?')}")
 
     if term is not None:
         if not getattr(term, "trade_allowed", True):

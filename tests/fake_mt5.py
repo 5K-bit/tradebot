@@ -62,7 +62,9 @@ class Market:
         self.equity = 10_000.0
         self.balance = 10_000.0
         self.terminal_up = True       # is the terminal answering?
-        self.can_initialize = True    # will a fresh initialize() succeed?
+        self.can_initialize = True
+        self.init_error = (-6, 'Terminal: Authorization failed')
+        self.init_needs_credentials = False    # will a fresh initialize() succeed?
         self.login_ok = True
         self.account_info_none = False
         self.next_ticket = 1000
@@ -112,12 +114,15 @@ def reset():
 
 # --- the API surface the bot uses -------------------------------------------
 def last_error():
-    return (-1, "fake error")
+    return MARKET.init_error
 
 
 def initialize(**kwargs):
     MARKET.init_calls += 1
     if not MARKET.can_initialize:
+        return False
+    # Some brokers only authorise when credentials are passed to initialize().
+    if MARKET.init_needs_credentials and "login" not in kwargs:
         return False
     MARKET.terminal_up = True   # the terminal came back
     return True
