@@ -138,6 +138,35 @@ class MT5Connector:
                 f"{'(LIVE)' if is_live else '(DEMO)'}"
             )
 
+    def server_utc_offset_hours(self, symbol: str | None = None) -> float | None:
+        """
+        The broker server's offset from UTC, derived from a tick timestamp.
+
+        Worth deriving rather than configuring: most brokers run on a European
+        clock and observe DST, so a hand-set offset is wrong for half the year
+        and shifts the daily-loss reset by an hour without anyone noticing.
+        Returns None when no tick is available (market closed), so the caller
+        can fall back to the configured value.
+        """
+        candidates = [symbol] if symbol else list(self._selected) or ["EURUSD"]
+        for name in candidates:
+            try:
+                self.ensure_symbol(name)
+                tick = mt5.symbol_info_tick(name)
+            except RuntimeError:
+                continue
+            stamp = getattr(tick, "time", None) if tick is not None else None
+            if not stamp:
+                continue
+            from datetime import datetime, timezone
+            server = datetime.fromtimestamp(stamp, tz=timezone.utc)
+            delta = (server - datetime.now(timezone.utc)).total_seconds() / 3600
+            offset = round(delta)
+            # A tick older than a weekend is stale, not an offset.
+            if abs(offset) <= 14:
+                return float(offset)
+        return None
+
     def is_connected(self) -> bool:
         return mt5.terminal_info() is not None and mt5.account_info() is not None
 

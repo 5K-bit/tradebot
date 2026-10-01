@@ -109,3 +109,23 @@ def test_symbol_selection_is_cached(market, conn):
     for _ in range(5):
         conn.get_candles("EURUSD", fake_mt5.TIMEFRAME_M15, count=200)
     assert market.selected.count("EURUSD") == 1
+
+
+def test_server_offset_derived_from_a_tick(market, conn):
+    """The broker's clock, read off a tick, rather than a hand-set constant."""
+    import time
+    market.closed_prices = [1.1000]
+    market.now_ts = time.time() + 3 * 3600          # server runs UTC+3
+    assert conn.server_utc_offset_hours("EURUSD") == 3.0
+
+    market.now_ts = time.time() - 5 * 3600
+    conn._selected.clear()
+    assert conn.server_utc_offset_hours("EURUSD") == -5.0
+
+
+def test_stale_tick_is_not_mistaken_for_an_offset(market, conn):
+    """A weekend-old tick is stale data, not a 60-hour timezone."""
+    import time
+    market.closed_prices = [1.1000]
+    market.now_ts = time.time() - 60 * 3600
+    assert conn.server_utc_offset_hours("EURUSD") is None
