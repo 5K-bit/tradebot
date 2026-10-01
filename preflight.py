@@ -58,6 +58,27 @@ def _try_initialize(label, **kwargs):
     return False, err
 
 
+def _terminal_running():
+    """
+    Is a terminal process actually up?
+
+    This matters because initialize() will LAUNCH a terminal if it cannot
+    attach to one, and a freshly launched terminal has no account loaded — so
+    "terminal not running" and "terminal running but not authorised" both
+    surface as -6 while needing completely different fixes.
+    Returns True, False, or None when it cannot be determined.
+    """
+    if not sys.platform.startswith("win"):
+        return None
+    import subprocess
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq terminal64.exe"],
+                             capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    return "terminal64.exe" in (out.stdout or "")
+
+
 def _find_terminals():
     """Common MT5 install locations, for when the wrong terminal is picked."""
     import glob
@@ -115,6 +136,23 @@ def connect():
         code = last_err[0] if isinstance(last_err, tuple) else None
         note(BAD, f"could not attach to a MetaTrader 5 terminal: {last_err}")
         print()
+
+        running = _terminal_running()
+        if running is False:
+            print("  terminal64.exe is NOT RUNNING.")
+            print()
+            print("  That is almost certainly the whole problem. The Python API cannot")
+            print("  work on its own: it attaches to a terminal you already have open.")
+            print("  When it cannot find one it launches a fresh copy, and that copy has")
+            print("  no account loaded — which reports as the -6 you are seeing.")
+            print()
+            print("  Open MetaTrader 5, log into your demo account, wait for the")
+            print("  bottom-right status bar to show a ping figure, then re-run this.")
+            return False
+        if running:
+            print("  terminal64.exe IS running, so this is an authorisation problem,")
+            print("  not a missing terminal.")
+            print()
         if code == -6:
             print("  -6 is AUTH_FAILED: a terminal was found, but it is not logged in")
             print("  to an authorised account. Check, in the terminal itself:")
@@ -129,6 +167,14 @@ def connect():
             print("       server string matches the terminal EXACTLY, including the")
             print("       suffix (e.g. 'ICMarketsSC-Demo', not 'ICMarkets-Demo').")
             print("    4. Close the terminal completely and reopen it, then retry.")
+            print()
+            print("  The decisive test: log into that exact account BY HAND in the")
+            print("  terminal (File > Login to Trade Account) using the same three")
+            print("  values. If the terminal itself refuses them, no amount of Python")
+            print("  will help — the credentials are wrong, or the account is gone.")
+            print("  MetaQuotes-Demo accounts in particular are deleted after a spell")
+            print("  of inactivity; if yours has lapsed, make a new one with")
+            print("  File > Open an Account and use the fresh number and password.")
         elif code == -10003:
             print("  -10003 means the terminal executable could not be found or started.")
         else:
