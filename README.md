@@ -152,7 +152,12 @@ nothing works.
    hundred bars. MT5 downloads history lazily; the indicators need ~400 bars
    and will otherwise see nothing.
 4. `pip install -r requirements.txt` in the same Python the bot runs under.
-5. Set the credentials as environment variables — never in the config file:
+5. **Credentials are optional.** If the terminal is signed in and connected,
+   the bot and `preflight.py` attach to that session — nothing to configure,
+   and no password stored anywhere. This is the recommended way to run it.
+
+   Set them only if you want the bot to log the terminal into a *specific*
+   account rather than using whatever is open:
 
    ```
    setx MT5_LOGIN "12345678"
@@ -162,6 +167,8 @@ nothing works.
 
    The server name must match the terminal exactly; copy it from the login
    dialog. Open a new terminal window after `setx` so it picks the values up.
+   If the credentials are rejected — a lapsed demo account, say — the bot falls
+   back to the terminal's own session and says so, rather than refusing to run.
 
 6. **Run the preflight check before the bot:**
 

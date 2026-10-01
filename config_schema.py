@@ -342,8 +342,23 @@ def management_config(cfg: dict):
     )
 
 
-def risk_config(cfg: dict, norm: Normalised):
+def broker_offset(cfg: dict):
+    """
+    Configured broker offset, or None when it should be derived at runtime.
+
+    "auto" (or an absent value) means ask the server, which is the only way to
+    stay correct across the broker's own daylight-saving changes.
+    """
+    raw = _first(cfg, ["broker.utc_offset_hours", "risk.broker_utc_offset_hours"])
+    if raw is None or str(raw).strip().lower() == "auto":
+        return None
+    return float(raw)
+
+
+def risk_config(cfg: dict, norm: Normalised, offset_override=None):
     from risk_manager import RiskConfig
+    configured = broker_offset(cfg)
+    offset = offset_override if configured is None else configured
     return RiskConfig(
         risk_per_trade_pct=norm.risk_pct,
         max_daily_loss_pct=_first(cfg, ["loss_protection.max_session_drawdown_pct",
@@ -352,8 +367,7 @@ def risk_config(cfg: dict, norm: Normalised):
                                         "risk.max_concurrent_trades",
                                         "session.max_open_positions"], 1),
         max_lot_size=_first(cfg, ["risk.max_lot_size"], 1.0),
-        broker_utc_offset_hours=_first(cfg, ["broker.utc_offset_hours",
-                                             "risk.broker_utc_offset_hours"], 0),
+        broker_utc_offset_hours=offset if offset is not None else 0.0,
     )
 
 

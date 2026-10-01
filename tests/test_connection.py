@@ -51,10 +51,43 @@ def test_connect_raises_clearly_when_account_info_is_none(market):
         MT5Connector().connect(quiet=True)
 
 
-def test_connect_raises_on_failed_login(market):
-    market.login_ok = False
-    with pytest.raises(RuntimeError, match="login failed"):
+def test_connects_with_no_credentials_at_all(market, monkeypatch):
+    """
+    The normal way to run against a terminal you are already signed into.
+    No password in the environment, nothing to lapse.
+    """
+    for var in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER"):
+        monkeypatch.delenv(var, raising=False)
+    c = MT5Connector()
+    assert c.login is None
+    c.connect(quiet=True)
+    assert c.is_connected()
+
+
+def test_lapsed_credentials_fall_back_to_the_terminal_session(market, capsys):
+    """
+    A demo account that has expired must not stop the bot running against a
+    terminal that is signed in and connected.
+    """
+    market.init_rejects_credentials = True
+    MT5Connector().connect()
+    out = capsys.readouterr().out
+    assert "credentials rejected" in out
+    assert "already has open" in out
+
+
+def test_raises_clearly_when_both_routes_fail(market):
+    market.can_initialize = False
+    with pytest.raises(RuntimeError, match="preflight.py"):
         MT5Connector().connect(quiet=True)
+
+
+def test_error_mentions_both_attempts(market):
+    market.can_initialize = False
+    try:
+        MT5Connector().connect(quiet=True)
+    except RuntimeError as e:
+        assert "with credentials" in str(e) and "without them" in str(e)
 
 
 def test_connect_raises_on_failed_initialize(market):
@@ -76,3 +109,23 @@ def test_symbol_selection_is_cached(market, conn):
     for _ in range(5):
         conn.get_candles("EURUSD", fake_mt5.TIMEFRAME_M15, count=200)
     assert market.selected.count("EURUSD") == 1
+
+
+def test_server_offset_derived_from_a_tick(market, conn):
+    """The broker's clock, read off a tick, rather than a hand-set constant."""
+    import time
+    market.closed_prices = [1.1000]
+    market.now_ts = time.time() + 3 * 3600          # server runs UTC+3
+    assert conn.server_utc_offset_hours("EURUSD") == 3.0
+
+    market.now_ts = time.time() - 5 * 3600
+    conn._selected.clear()
+    assert conn.server_utc_offset_hours("EURUSD") == -5.0
+
+
+def test_stale_tick_is_not_mistaken_for_an_offset(market, conn):
+    """A weekend-old tick is stale data, not a 60-hour timezone."""
+    import time
+    market.closed_prices = [1.1000]
+    market.now_ts = time.time() - 60 * 3600
+    assert conn.server_utc_offset_hours("EURUSD") is None

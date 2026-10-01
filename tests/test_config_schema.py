@@ -342,3 +342,37 @@ def test_slippage_points_reach_the_config():
     cfg = grouped()
     cfg["execution"] = {"max_slippage_points": 35}
     assert cs.normalise(cfg).deviation_points == 35
+
+
+# --- broker offset: configured, or derived from the server ------------------
+def test_explicit_broker_offset_is_used():
+    assert cs.broker_offset(grouped(broker__utc_offset_hours=3)) == 3.0
+
+
+def test_auto_offset_defers_to_runtime():
+    assert cs.broker_offset(grouped(broker__utc_offset_hours="auto")) is None
+
+
+def test_absent_offset_defers_to_runtime():
+    cfg = grouped()
+    del cfg["broker"]["utc_offset_hours"]
+    assert cs.broker_offset(cfg) is None
+
+
+def test_explicit_offset_beats_the_derived_one():
+    """A hand-set value is a deliberate override and must win."""
+    n = cs.normalise(grouped(broker__utc_offset_hours=5))
+    r = cs.risk_config(grouped(broker__utc_offset_hours=5), n, offset_override=9)
+    assert r.broker_utc_offset_hours == 5.0
+
+
+def test_derived_offset_is_used_when_auto():
+    cfg = grouped(broker__utc_offset_hours="auto")
+    r = cs.risk_config(cfg, cs.normalise(cfg), offset_override=3)
+    assert r.broker_utc_offset_hours == 3.0
+
+
+def test_auto_with_nothing_derived_falls_back_to_utc():
+    cfg = grouped(broker__utc_offset_hours="auto")
+    r = cs.risk_config(cfg, cs.normalise(cfg), offset_override=None)
+    assert r.broker_utc_offset_hours == 0.0

@@ -289,6 +289,11 @@ spread:
 
   # Absolute ceiling in pips, independent of the median. Set this from your
   # broker's ACTUAL 22:00-06:00 spreads, not its advertised typical spread.
+  #
+  # NOTE on MetaQuotes-Demo: it quoted both pairs at 0.10 pips, which no real
+  # broker does. Its feed is synthetic, so a run there cannot tell you whether
+  # this filter is set sensibly. Re-measure with preflight.py against the
+  # broker you actually intend to trade before relying on this number.
   max_spread_pips: 2.0            # REVIEW
 
 
@@ -437,6 +442,9 @@ execution:
   # refuses the mode we send rejects EVERY order. "auto" asks each symbol what
   # it allows (preferring IOC, then FOK, then RETURN). Run preflight.py to see
   # what your broker reports before overriding this.
+  #   MetaQuotes-Demo accepts FOK only, not IOC — measured 2026-10-01. A
+  #   hardcoded IOC would have had every order rejected, which is what "auto"
+  #   exists to prevent.
   filling_mode: auto            # auto | IOC | FOK | RETURN
 
   max_slippage_points: 20       # sent as the order deviation
@@ -497,7 +505,13 @@ state:
 # BROKER
 # ------------------------------------------------------------
 broker:
-  utc_offset_hours: 0             # REVIEW your MT5 server timezone
+  # "auto" asks the server for its clock at startup. Prefer it: most brokers
+  # run a European clock and observe daylight saving, so a hand-set number is
+  # wrong for half the year and shifts the daily-loss reset by an hour with no
+  # warning. Set a number only to override.
+  #   MetaQuotes-Demo measured at UTC+3 (EEST) on 2026-10-01; it becomes +2
+  #   when Europe leaves DST in late October — which "auto" handles.
+  utc_offset_hours: auto
 
   # NOT YET WIRED as explicit pre-flight checks. In practice symbol
   # availability and volume limits are enforced implicitly — the engine

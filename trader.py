@@ -162,7 +162,20 @@ class Lathe:
         self.protection = protection_mod.Protection(
             schema.protection_config(cfg), state=state)
         self.mgmt = schema.management_config(cfg)
-        self.risk = RiskManager(schema.risk_config(cfg, self.norm), state=state)
+        # When the offset is "auto", ask the server. A hand-set value is wrong
+        # for half the year on any broker that observes daylight saving.
+        derived = None
+        if schema.broker_offset(cfg) is None:
+            derived = self.conn.server_utc_offset_hours()
+            if derived is None:
+                derived = 0.0
+                print("[lathe] could not derive the broker's UTC offset (no tick — "
+                      "market closed?); assuming UTC. Set broker.utc_offset_hours "
+                      "explicitly if the daily reset looks wrong.")
+            else:
+                print(f"[lathe] broker server is UTC{derived:+.0f}; the daily loss "
+                      f"limit resets at its midnight")
+        self.risk = RiskManager(schema.risk_config(cfg, self.norm, derived), state=state)
 
         self.tf_regime = TIMEFRAME_MAP[self.norm.tf_regime]
         self.tf_setup = TIMEFRAME_MAP[self.norm.tf_setup]

@@ -60,10 +60,16 @@ class SymbolLimits:
 
 class MT5Connector:
     def __init__(self):
-        self.login = int(os.environ["MT5_LOGIN"])
-        self.password = os.environ["MT5_PASSWORD"]
-        self.server = os.environ["MT5_SERVER"]
-        self.path = os.environ.get("MT5_PATH")  # optional
+        # All optional. With them, the connector logs the terminal into that
+        # account; without them it attaches to whatever account the terminal
+        # already has open. The second is both simpler and safer — no password
+        # in the environment or the registry — and is the normal way to run
+        # this against a terminal you are already signed into.
+        login = os.environ.get("MT5_LOGIN")
+        self.login = int(login) if login else None
+        self.password = os.environ.get("MT5_PASSWORD")
+        self.server = os.environ.get("MT5_SERVER")
+        self.path = os.environ.get("MT5_PATH")
         self._selected: set[str] = set()
         # In PAPER/BACKTEST the connector still reads prices and account state,
         # but every order-sending call is simulated. The guard lives here rather
@@ -81,13 +87,35 @@ class MT5Connector:
         if self.path:
             init_kwargs["path"] = self.path
 
-        if not mt5.initialize(**init_kwargs):
-            raise RuntimeError(f"MT5 initialize() failed: {mt5.last_error()}")
+        # Credentials go to initialize() rather than a separate login() call:
+        # that is what the MetaTrader5 docs recommend, and initialize() alone
+        # fails with AUTH_FAILED (-6) when the terminal's active account is not
+        # authorised, even where a login would have worked.
+        have_credentials = bool(self.login and self.password and self.server)
+        if have_credentials:
+            init_kwargs.update(login=self.login, password=self.password,
+                               server=self.server)
 
-        authorized = mt5.login(self.login, password=self.password, server=self.server)
-        if not authorized:
-            mt5.shutdown()
-            raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
+        if not mt5.initialize(**init_kwargs):
+            first_error = mt5.last_error()
+            # Fall back to borrowing the terminal's own session. Credentials
+            # that have lapsed should not stop the bot running against a
+            # terminal that is signed in and connected.
+            if have_credentials:
+                bare = {"path": self.path} if self.path else {}
+                if mt5.initialize(**bare):
+                    if not quiet:
+                        print(f"[mt5] credentials rejected ({first_error}); using the "
+                              f"account the terminal already has open")
+                else:
+                    raise RuntimeError(
+                        f"MT5 initialize() failed with credentials {first_error} "
+                        f"and without them {mt5.last_error()}. Is the terminal "
+                        f"running and logged in? Run preflight.py for details.")
+            else:
+                raise RuntimeError(
+                    f"MT5 initialize() failed: {first_error}. Is the terminal "
+                    f"running and logged in? Run preflight.py for details.")
 
         acct = mt5.account_info()
         if acct is None:
@@ -104,10 +132,40 @@ class MT5Connector:
             # Only REAL is "(LIVE)" — everything else is treated as non-live.
             is_live = acct.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL
             print(
-                f"[mt5] connected: login={acct.login} server={self.server} "
+                f"[mt5] connected: login={acct.login} "
+                f"server={getattr(acct, 'server', self.server) or '?'} "
                 f"balance={acct.balance} {acct.currency} "
                 f"{'(LIVE)' if is_live else '(DEMO)'}"
             )
+
+    def server_utc_offset_hours(self, symbol: str | None = None) -> float | None:
+        """
+        The broker server's offset from UTC, derived from a tick timestamp.
+
+        Worth deriving rather than configuring: most brokers run on a European
+        clock and observe DST, so a hand-set offset is wrong for half the year
+        and shifts the daily-loss reset by an hour without anyone noticing.
+        Returns None when no tick is available (market closed), so the caller
+        can fall back to the configured value.
+        """
+        candidates = [symbol] if symbol else list(self._selected) or ["EURUSD"]
+        for name in candidates:
+            try:
+                self.ensure_symbol(name)
+                tick = mt5.symbol_info_tick(name)
+            except RuntimeError:
+                continue
+            stamp = getattr(tick, "time", None) if tick is not None else None
+            if not stamp:
+                continue
+            from datetime import datetime, timezone
+            server = datetime.fromtimestamp(stamp, tz=timezone.utc)
+            delta = (server - datetime.now(timezone.utc)).total_seconds() / 3600
+            offset = round(delta)
+            # A tick older than a weekend is stale, not an offset.
+            if abs(offset) <= 14:
+                return float(offset)
+        return None
 
     def is_connected(self) -> bool:
         return mt5.terminal_info() is not None and mt5.account_info() is not None
