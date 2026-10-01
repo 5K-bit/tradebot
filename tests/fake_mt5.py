@@ -64,7 +64,8 @@ class Market:
         self.terminal_up = True       # is the terminal answering?
         self.can_initialize = True
         self.init_error = (-6, 'Terminal: Authorization failed')
-        self.init_needs_credentials = False    # will a fresh initialize() succeed?
+        self.init_needs_credentials = False
+        self.init_rejects_credentials = False    # will a fresh initialize() succeed?
         self.login_ok = True
         self.account_info_none = False
         self.next_ticket = 1000
@@ -123,6 +124,10 @@ def initialize(**kwargs):
         return False
     # Some brokers only authorise when credentials are passed to initialize().
     if MARKET.init_needs_credentials and "login" not in kwargs:
+        return False
+    # A lapsed account: the credentials are refused, but the terminal's own
+    # session is fine.
+    if MARKET.init_rejects_credentials and "login" in kwargs:
         return False
     MARKET.terminal_up = True   # the terminal came back
     return True
