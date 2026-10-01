@@ -477,6 +477,21 @@ state:
   path: ".lathe_state.json"
   reject_missing_state_during_active_session: true
 
+  # What must survive a restart. The engine persists the risk baseline, halt
+  # and kill-switch flags, session trade count, consecutive losses, spread
+  # window, candle cursor and open-trade metadata. This list is the contract;
+  # the engine does not read it.
+  persist:
+    - session_date
+    - session_start_equity
+    - trades_this_session
+    - consecutive_losses
+    - rolling_drawdown
+    - halt_flag
+    - kill_switch
+    - last_processed_candle
+    - open_trade_metadata
+
 
 # ------------------------------------------------------------
 # BROKER
