@@ -144,7 +144,7 @@ def connect():
             print("  That is almost certainly the whole problem. The Python API cannot")
             print("  work on its own: it attaches to a terminal you already have open.")
             print("  When it cannot find one it launches a fresh copy, and that copy has")
-            print("  no account loaded — which reports as the -6 you are seeing.")
+            print("  no account loaded - which reports as the -6 you are seeing.")
             print()
             print("  Open MetaTrader 5, log into your demo account, wait for the")
             print("  bottom-right status bar to show a ping figure, then re-run this.")
@@ -171,7 +171,7 @@ def connect():
             print("  The decisive test: log into that exact account BY HAND in the")
             print("  terminal (File > Login to Trade Account) using the same three")
             print("  values. If the terminal itself refuses them, no amount of Python")
-            print("  will help — the credentials are wrong, or the account is gone.")
+            print("  will help - the credentials are wrong, or the account is gone.")
             print("  MetaQuotes-Demo accounts in particular are deleted after a spell")
             print("  of inactivity; if yours has lapsed, make a new one with")
             print("  File > Open an Account and use the fresh number and password.")
@@ -184,7 +184,7 @@ def connect():
         if len(installs) > 1:
             print()
             print(f"  {len(installs)} MT5 terminals found. The API may have picked the")
-            print("  wrong one — point it at the right install with MT5_PATH:")
+            print("  wrong one - point it at the right install with MT5_PATH:")
             for t in installs:
                 print(f"    setx MT5_PATH \"{t}\"")
         elif installs:
@@ -206,7 +206,7 @@ def connect():
         note(WARN, f"this is a REAL-MONEY account ({acct.login}). For practice, "
                    f"switch the terminal to your demo account and re-run.")
     else:
-        note(OK, f"{kind} account {acct.login} — {acct.balance} {acct.currency} "
+        note(OK, f"{kind} account {acct.login} - {acct.balance} {acct.currency} "
                  f"on {getattr(acct, 'server', server or '?')}")
 
     if term is not None:
@@ -244,7 +244,7 @@ def resolve_symbols():
             pick = sorted(matches, key=len)[0]
             resolved[want] = pick
             note(WARN, f"{want} not found; closest is {pick!r} "
-                       f"(all: {matches[:6]}) — put this in config.yaml symbols")
+                       f"(all: {matches[:6]}) - put this in config.yaml symbols")
         else:
             note(BAD, f"no symbol resembling {want} on this account")
     return resolved
@@ -310,7 +310,7 @@ def broker_offset(resolved):
     tick = mt5.symbol_info_tick(symbol)
     stamp = getattr(tick, "time", None) if tick is not None else None
     if not stamp:
-        note(WARN, "no tick timestamp available — re-run during market hours to "
+        note(WARN, "no tick timestamp available - re-run during market hours to "
                    "derive broker.utc_offset_hours, or read it off the terminal's "
                    "Market Watch clock")
         return 0
@@ -320,7 +320,7 @@ def broker_offset(resolved):
     print(f"  server clock : {server:%Y-%m-%d %H:%M:%S} (from last tick)")
     print(f"  your UTC now : {now:%Y-%m-%d %H:%M:%S}")
     if abs(offset_hours) > 14:
-        note(WARN, f"derived offset {offset_hours}h looks wrong — the market may be "
+        note(WARN, f"derived offset {offset_hours}h looks wrong - the market may be "
                    f"closed, so the last tick is stale. Re-run during market hours.")
     else:
         note(OK, f"broker.utc_offset_hours: {offset_hours}")
@@ -338,15 +338,15 @@ def check_history(resolved):
             if got >= need:
                 note(OK, f"{actual} {label}: {got} bars")
             elif got >= 250:
-                note(WARN, f"{actual} {label}: only {got} bars — enough to start, "
+                note(WARN, f"{actual} {label}: only {got} bars - enough to start, "
                            f"but scroll the chart back in the terminal to load more")
             else:
-                note(BAD, f"{actual} {label}: only {got} bars — open that chart in "
+                note(BAD, f"{actual} {label}: only {got} bars - open that chart in "
                           f"the terminal and scroll back to download history")
 
 
 def probe_orders(resolved, details):
-    header("6. ORDER ACCEPTANCE  (order_check only — nothing is sent)")
+    header("6. ORDER ACCEPTANCE  (order_check only - nothing is sent)")
     for actual, meta in details.items():
         tick = mt5.symbol_info_tick(actual)
         if tick is None:
@@ -391,7 +391,7 @@ def probe_orders(resolved, details):
         else:
             note(BAD, f"{actual}: pending BUY_STOP with expiry REJECTED "
                       f"(retcode {code}: {getattr(result, 'comment', '')}). "
-                      f"The bot enters with these — try ORDER_TIME_GTC instead.")
+                      f"The bot enters with these - try ORDER_TIME_GTC instead.")
 
 
 def summary(resolved, details, offset):
@@ -408,7 +408,7 @@ def summary(resolved, details, offset):
         suggested = max(1.0, round(worst * 2, 1))
         print(f"\nspread:\n  max_spread_pips: {suggested}"
               f"   # 2x the widest spread seen just now ({worst:.2f})")
-        print("  # Re-run this during 22:00-06:00 New York — spreads widen overnight,")
+        print("  # Re-run this during 22:00-06:00 New York - spreads widen overnight,")
         print("  # and that is the only window this bot trades in.")
 
     print(f"\n{'-' * 66}")

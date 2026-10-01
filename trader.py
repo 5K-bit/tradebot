@@ -111,7 +111,12 @@ def validate_config(cfg: dict):
 def log_to_vault(vault_path: str, message: str):
     p = Path(vault_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().isoformat(timespec="seconds")
+    # Local time, because that is how an operator reads a day back, but with
+    # the UTC offset attached. The companion JSONL is stamped in UTC, and the
+    # session windows are New York: without the offset here, lining the two
+    # files up means guessing which clock this column is on, and a DST change
+    # would make the column non-monotonic with nothing to show why.
+    ts = datetime.now().astimezone().isoformat(timespec="seconds")
     with p.open("a", encoding="utf-8") as f:
         f.write(f"- **{ts}** - {message}\n")
 

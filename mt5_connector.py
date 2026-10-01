@@ -179,7 +179,7 @@ class MT5Connector:
         if self.is_connected():
             return True
 
-        print("[mt5] connection to terminal lost - attempting to reconnect…")
+        print("[mt5] connection to terminal lost - attempting to reconnect...")
         for attempt, delay in enumerate(RECONNECT_BACKOFF_SECONDS, start=1):
             try:
                 mt5.shutdown()

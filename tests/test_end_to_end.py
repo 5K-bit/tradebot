@@ -155,6 +155,27 @@ def test_session_state_is_logged_on_the_first_pass(config, monkeypatch, market):
     assert "Session CLOSED" in out["log"]
 
 
+def test_vault_timestamps_carry_a_utc_offset(config, monkeypatch, market, tmp_path):
+    """
+    trades.md is read by a person, so it is stamped in local time - but the
+    companion JSONL is stamped in UTC and the session windows are New York.
+    Without an offset on this column there is no way to line the two files up,
+    and a DST change would walk the column backwards unexplained.
+    """
+    from datetime import datetime
+
+    vault = tmp_path / "stamp.md"
+    trader.log_to_vault(str(vault), "a message")
+    line = vault.read_text(encoding="utf-8").strip()
+
+    stamp = line.split("**")[1]
+    parsed = datetime.fromisoformat(stamp)
+    assert parsed.utcoffset() is not None, (
+        f"timestamp {stamp!r} has no UTC offset, so which clock it is on is a "
+        "guess"
+    )
+
+
 def test_log_lines_are_ascii(config, monkeypatch, market):
     """
     The files are written UTF-8, but PowerShell's Get-Content reads ANSI by
