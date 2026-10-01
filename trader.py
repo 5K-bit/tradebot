@@ -113,7 +113,7 @@ def log_to_vault(vault_path: str, message: str):
     p.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().isoformat(timespec="seconds")
     with p.open("a", encoding="utf-8") as f:
-        f.write(f"- **{ts}** — {message}\n")
+        f.write(f"- **{ts}** - {message}\n")
 
 
 def log_decision(vault_path: str, symbol: str, outcome: str, reason: str, **fields):
@@ -123,7 +123,7 @@ def log_decision(vault_path: str, symbol: str, outcome: str, reason: str, **fiel
     """
     parts = [f"{k}={v}" for k, v in fields.items() if v is not None]
     detail = (" " + " ".join(parts)) if parts else ""
-    log_to_vault(vault_path, f"{outcome} {symbol}{detail} — {reason}")
+    log_to_vault(vault_path, f"{outcome} {symbol}{detail} - {reason}")
 
 
 def append_jsonl(path: str | None, record: dict) -> None:
@@ -169,7 +169,7 @@ class Lathe:
             derived = self.conn.server_utc_offset_hours()
             if derived is None:
                 derived = 0.0
-                print("[lathe] could not derive the broker's UTC offset (no tick — "
+                print("[lathe] could not derive the broker's UTC offset (no tick - "
                       "market closed?); assuming UTC. Set broker.utc_offset_hours "
                       "explicitly if the daily reset looks wrong.")
             else:
@@ -386,7 +386,7 @@ class Lathe:
         log_to_vault(self.vault, f"SIGNAL {json.dumps(signal, default=str)}")
         log_decision(
             self.vault, symbol, signal["signal"],
-            f"{candidate.setup} in {current.state} — {breakdown.classification}",
+            f"{candidate.setup} in {current.state} - {breakdown.classification}",
             score=breakdown.total, lots=lots, entry=round(candidate.entry_price, 5),
             sl=round(candidate.stop_price, 5), tp=round(candidate.target_price, 5),
             rr=round(candidate.rr, 2), ticket=result.order,
@@ -408,16 +408,23 @@ class Lathe:
 def main():
 
     cfg = load_config()
-    validate_config(cfg)
+    norm = validate_config(cfg)
 
-    state = JsonState((cfg.get("state") or {}).get("path", ".lathe_state.json"))
+    state = JsonState(norm.state_path)
     conn = MT5Connector()
     conn.connect()
 
-    bot = Lathe(cfg, conn, state)
-    poll_seconds = cfg["poll_seconds"]
+    bot = Lathe(cfg, conn, state, norm=norm)
+    poll_seconds = norm.poll_seconds
 
-    log_to_vault(bot.vault, f"Lathe started. Symbols={cfg['symbols']} "
+    # The mode belongs in the log, not just on the console. Whether a session
+    # could have sent orders is the first thing you want to know when reading
+    # back a day's decisions.
+    banner = schema.describe_mode(norm)
+    print(f"[lathe] mode: {banner}")
+    log_to_vault(bot.vault, f"MODE: {banner}")
+
+    log_to_vault(bot.vault, f"Lathe started. Symbols={norm.symbols} "
                             f"session={bot.session.describe()} "
                             f"TFs={cfg['timeframes']}")
     enabled = ", ".join(bot.enabled_setups) or "none"
@@ -425,7 +432,9 @@ def main():
                             f"{bot.min_score}, trigger must score "
                             f"{scoring.REQUIRED_TRIGGER_SCORE}.")
 
-    was_open = None
+    # A sentinel rather than None: starting outside the session is itself worth
+    # recording, and `None != None` would never fire on the first pass.
+    was_open = object()
     try:
         while True:
             try:

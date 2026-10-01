@@ -93,7 +93,7 @@ class Protection:
         self._account_halted = bool(self._get("account_halted", False))
 
         if self._account_halted:
-            print("[protect] ACCOUNT DRAWDOWN KILL SWITCH is set — refusing all new trades. "
+            print("[protect] ACCOUNT DRAWDOWN KILL SWITCH is set - refusing all new trades. "
                   "Clear 'account_halted' in the state file once you have reviewed why.")
 
     # --- state plumbing ----------------------------------------------------
@@ -151,7 +151,7 @@ class Protection:
         Both must hold; either failing is a HOLD.
         """
         if spread is None or spread != spread:
-            return Decision(False, "spread unavailable — invalid tick data")
+            return Decision(False, "spread unavailable - invalid tick data")
 
         median = self.median_spread()
         if median == median and median > 0:
@@ -229,11 +229,11 @@ class Protection:
                 now = now or datetime.now(timezone.utc)
                 until = now.timestamp() + self.cfg.cooldown_minutes * 60
                 self._cooldown_until = until
-                print(f"[protect] {self._consecutive_losses} consecutive losses — "
+                print(f"[protect] {self._consecutive_losses} consecutive losses - "
                       f"cooling down for {self.cfg.cooldown_minutes} minutes.")
             else:
                 self._cooldown_session = session_key
-                print(f"[protect] {self._consecutive_losses} consecutive losses — "
+                print(f"[protect] {self._consecutive_losses} consecutive losses - "
                       f"sitting out the rest of session {session_key}.")
         self._persist()
 
@@ -270,7 +270,7 @@ class Protection:
             return Decision(False, f"cooldown active for another {remaining:.0f} min")
 
         if spread_pips is None:
-            return Decision(False, "spread unavailable — invalid tick data")
+            return Decision(False, "spread unavailable - invalid tick data")
         if spread_pips > self.cfg.max_spread_pips:
             return Decision(False, f"spread {spread_pips:.2f} pips above limit {self.cfg.max_spread_pips}")
 
@@ -303,7 +303,7 @@ class Protection:
             except (KeyError, ValueError, TypeError):
                 # A window we cannot parse must be loud, not silently ignored —
                 # a missed blackout is a trade taken into a news spike.
-                print(f"[protect] IGNORING unparseable news window {window!r} — "
+                print(f"[protect] IGNORING unparseable news window {window!r} - "
                       f"it will NOT block trading. Fix it in config.yaml.")
                 continue
             if start.tzinfo is None:

@@ -30,11 +30,11 @@ class JsonState:
             if isinstance(loaded, dict):
                 self._data = loaded
             else:
-                print(f"[state] {self.path} is not a JSON object — ignoring it.")
+                print(f"[state] {self.path} is not a JSON object - ignoring it.")
         except (json.JSONDecodeError, OSError) as e:
             # Don't crash the bot over a corrupt state file, but be loud: a
             # lost kill-switch baseline is a real safety event.
-            print(f"[state] could not read {self.path} ({e}) — starting with empty state.")
+            print(f"[state] could not read {self.path} ({e}) - starting with empty state.")
 
     def get(self, key: str, default=None):
         return self._data.get(key, default)

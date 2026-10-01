@@ -128,3 +128,43 @@ def test_main_validates_config_before_connecting(config, monkeypatch, market):
         trader.main()
     assert market.init_calls == 0, "connected to the terminal before validating config"
     assert market.orders == []
+
+
+def test_mode_is_recorded_in_the_log(config, monkeypatch, market):
+    """
+    Whether a session could have sent orders is the first thing you want when
+    reading back a day's decisions, so it belongs in the file, not just on the
+    console.
+    """
+    out = run_main(config, monkeypatch, market, cycles=4)
+    assert "MODE:" in out["log"]
+    assert "LIVE" in out["log"] or "PAPER" in out["log"] or "BACKTEST" in out["log"]
+
+
+def test_session_state_is_logged_on_the_first_pass(config, monkeypatch, market):
+    """
+    Starting OUTSIDE the session must still say so. Seeding the previous state
+    with None would make `None != None` false and log nothing, leaving no
+    evidence the session gate was even consulted.
+    """
+    from datetime import datetime
+    from conftest import OUT_OF_SESSION_UTC
+    out = run_main(config, monkeypatch, market, cycles=4,
+                   clock_start=datetime.fromisoformat(OUT_OF_SESSION_UTC),
+                   minutes_per_cycle=1)
+    assert "Session CLOSED" in out["log"]
+
+
+def test_log_lines_are_ascii(config, monkeypatch, market):
+    """
+    The files are written UTF-8, but PowerShell's Get-Content reads ANSI by
+    default and renders an em-dash as mojibake. An operational log has to be
+    readable in the shell the operator actually has.
+    """
+    out = run_main(config, monkeypatch, market, cycles=6, minutes_per_cycle=16)
+    assert out["log"], "nothing was logged"
+    try:
+        out["log"].encode("ascii")
+    except UnicodeEncodeError as e:
+        offending = out["log"][max(0, e.start - 60):e.end + 60]
+        raise AssertionError(f"non-ASCII in the trade log near: {offending!r}") from None

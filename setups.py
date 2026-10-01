@@ -165,10 +165,10 @@ def _trigger_points(structure_ok: bool, break_fired: bool,
     20 = full trigger, 10 = forming, 0 = none.
     """
     if structure_ok and break_fired:
-        return 20, f"trigger confirmed — {why}"
+        return 20, f"trigger confirmed - {why}"
     if structure_ok or break_fired:
-        return 10, f"trigger forming — {why}"
-    return 0, f"no trigger — {why}"
+        return 10, f"trigger forming - {why}"
+    return 0, f"no trigger - {why}"
 
 
 def _atr_of(candles, cfg: SetupConfig) -> float:
@@ -198,15 +198,15 @@ def _trend_pullback(m15, m5, regime, cfg: SetupConfig, long: bool):
 
     # SPEC invalidation: M15 closing beyond the far EMA voids the pullback.
     if long and close15 < ema_slow15:
-        return None, f"M15 close {close15:.5f} below EMA{cfg.ema_slow} — pullback invalidated"
+        return None, f"M15 close {close15:.5f} below EMA{cfg.ema_slow} - pullback invalidated"
     if not long and close15 > ema_slow15:
-        return None, f"M15 close {close15:.5f} above EMA{cfg.ema_slow} — pullback invalidated"
+        return None, f"M15 close {close15:.5f} above EMA{cfg.ema_slow} - pullback invalidated"
 
     # SPEC: H1 close must stay the right side of its EMA20.
     if long and regime.close < regime.ema_fast:
-        return None, "H1 close is below EMA20 — bullish pullback invalid"
+        return None, "H1 close is below EMA20 - bullish pullback invalid"
     if not long and regime.close > regime.ema_fast:
-        return None, "H1 close is above EMA20 — bearish pullback invalid"
+        return None, "H1 close is above EMA20 - bearish pullback invalid"
 
     # Structure: the M15 EMA20, plus recent swing structure on the trade's side.
     structures = [(ema_fast15, f"EMA{cfg.ema_fast}")]
@@ -218,7 +218,7 @@ def _trend_pullback(m15, m5, regime, cfg: SetupConfig, long: bool):
     level, label, distance = min(
         ((lv, lb, abs(close15 - lv)) for lv, lb in structures), key=lambda t: t[2])
     if distance > limit:
-        return None, (f"price is {distance:.5f} from {label} — beyond the "
+        return None, (f"price is {distance:.5f} from {label} - beyond the "
                       f"{limit:.5f} pullback limit")
 
     structure_ok = _higher_low(m5, cfg) if long else _lower_high(m5, cfg)
@@ -365,7 +365,7 @@ def _breakout_retest(m15, m5, regime, cfg: SetupConfig, long: bool):
                           f"beyond the {limit:.5f} limit")
         held = (last_close > level) if long else (last_close < level)
         if not held:
-            return None, "failed breakout — M15 closed back inside the old range"
+            return None, "failed breakout - M15 closed back inside the old range"
 
         fired, _, why = _three_bar_break(m5, cfg, up=long)
         trigger_points, trigger_reason = _trigger_points(True, fired, why)
