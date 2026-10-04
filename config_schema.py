@@ -58,6 +58,7 @@ class Normalised:
     poll_seconds: int
     mode: str
     live_enabled: bool
+    require_demo: bool
     risk_pct: float
     trade_log: str
     decision_log: str | None
@@ -98,6 +99,9 @@ def normalise(cfg: dict) -> Normalised:
     if mode not in VALID_MODES:
         raise ConfigError(f"safety.default_mode is {mode!r}; expected one of {VALID_MODES}.")
     live_enabled = bool(_get(cfg, "safety.live_trading_enabled", False))
+    # Defaults to true: the expensive mistake is sending an order to a real
+    # account believing it is a demo, never the reverse.
+    require_demo = bool(_get(cfg, "safety.require_demo_account", True))
 
     risk_pct = resolve_risk_pct(cfg)
 
@@ -110,7 +114,7 @@ def normalise(cfg: dict) -> Normalised:
         symbols=list(symbols),
         tf_regime=tf_regime, tf_setup=tf_setup, tf_entry=tf_entry,
         poll_seconds=int(_first(cfg, ["poll_seconds"], 30)),
-        mode=mode, live_enabled=live_enabled,
+        mode=mode, live_enabled=live_enabled, require_demo=require_demo,
         risk_pct=risk_pct,
         trade_log=trade_log,
         decision_log=(_get(cfg, "logging.decision_log.path")
@@ -193,6 +197,30 @@ def describe_mode(norm: Normalised) -> str:
         return ("LIVE requested but safety.live_trading_enabled is not true - "
                 "running in PAPER")
     return f"{norm.mode} - no orders are sent to the broker"
+
+
+def check_account(norm: Normalised, is_live_account: bool) -> None:
+    """
+    Refuse to send orders to a real-money account unless that was asked for.
+
+    The MetaTrader5 package attaches to whichever account the terminal has
+    open, so which account the bot reaches is a property of the terminal's
+    current state rather than of this config - and a terminal signed into both
+    a demo and a live account looks identical from here. This turns a silent
+    wrong-account run into a refusal to start.
+    """
+    if effective_mode(norm) != MODE_LIVE:
+        return                      # nothing is sent, so the account is moot
+    if not norm.require_demo:
+        return                      # deliberately allowed
+    if is_live_account:
+        raise ConfigError(
+            "refusing to start: mode is LIVE with live_trading_enabled true, "
+            "but the terminal is on a REAL-money account and "
+            "safety.require_demo_account is true. Either switch the terminal "
+            "(or MT5_LOGIN) to the demo account, or set "
+            "safety.require_demo_account: false to trade real money on "
+            "purpose.")
 
 
 def effective_mode(norm: Normalised) -> str:

@@ -4,15 +4,14 @@ closing, a terminal outage, the kill switches, and what ends up in the trade
 log and state file.
 """
 import json
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
-
 import scenarios as S
+from conftest import IN_SESSION_UTC, feed_candles
 
 import trader
-from conftest import IN_SESSION_UTC, feed_candles
 
 START = datetime.fromisoformat(IN_SESSION_UTC)
 
@@ -148,6 +147,7 @@ def test_session_state_is_logged_on_the_first_pass(config, monkeypatch, market):
     evidence the session gate was even consulted.
     """
     from datetime import datetime
+
     from conftest import OUT_OF_SESSION_UTC
     out = run_main(config, monkeypatch, market, cycles=4,
                    clock_start=datetime.fromisoformat(OUT_OF_SESSION_UTC),
@@ -189,3 +189,30 @@ def test_log_lines_are_ascii(config, monkeypatch, market):
     except UnicodeEncodeError as e:
         offending = out["log"][max(0, e.start - 60):e.end + 60]
         raise AssertionError(f"non-ASCII in the trade log near: {offending!r}") from None
+
+
+def test_main_refuses_to_start_live_against_a_real_account(config, monkeypatch, market):
+    """
+    The guard has to fire in main(), after connecting and before the loop: the
+    account is only knowable once attached, and by the first poll an order could
+    already have gone out.
+    """
+    import copy
+
+    import config_schema as cs
+
+    cfg = copy.deepcopy(config)
+    cfg["safety"] = {"default_mode": "LIVE", "live_trading_enabled": True}
+    market.trade_mode = 2            # ACCOUNT_TRADE_MODE_REAL
+
+    monkeypatch.setattr(trader, "load_config", lambda path="config.yaml": cfg)
+
+    def no_sleeping(_seconds):
+        raise AssertionError("main() entered the poll loop on a real account")
+
+    monkeypatch.setattr(trader.time, "sleep", no_sleeping)
+
+    with pytest.raises(cs.ConfigError) as e:
+        trader.main()
+    assert "require_demo_account" in str(e.value)
+    assert market.orders == [], "an order was sent before the guard fired"

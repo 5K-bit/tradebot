@@ -560,6 +560,18 @@ safety:
   live_trading_requires_explicit_enable: true
   fail_closed: true
 
+  # Orders only go to a demo account. Set LIVE + live_trading_enabled with this
+  # left true and the bot sends real orders to the DEMO account: real fills,
+  # real spreads, real slippage, fake money. That is the useful way to exercise
+  # the strategy without funding anything.
+  #
+  # It matters because the MetaTrader5 package attaches to whichever account the
+  # terminal has open. A terminal signed into both a demo and a live account
+  # looks the same from here, so without this a slip in the terminal is enough
+  # to put real money behind the orders. Set it false only when trading real
+  # money on purpose.
+  require_demo_account: true
+
   # BACKTEST currently behaves exactly like PAPER — decisions are made against
   # live data and logged, with no orders sent. There is no historical replay
   # engine, so it does not backtest anything.

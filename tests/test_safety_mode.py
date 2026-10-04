@@ -112,3 +112,68 @@ def test_auto_filling_follows_what_the_symbol_allows(conn, market):
         conn._selected.clear()
         conn.market_order("EURUSD", 0.1, "buy", sl_price=1.09, tp_price=1.12)
         assert market.orders[0]["type_filling"] == expected
+
+
+# --- the account the orders actually reach -----------------------------------
+# The MetaTrader5 package attaches to whichever account the terminal has open,
+# so the account is a property of the terminal, not of this config. These cover
+# the guard that stops a terminal slip putting real money behind the orders.
+
+def norm_for(config, mode, enabled, require_demo=None):
+    cfg = copy.deepcopy(config)
+    cfg["safety"] = {"default_mode": mode, "live_trading_enabled": enabled}
+    if require_demo is not None:
+        cfg["safety"]["require_demo_account"] = require_demo
+    return cs.normalise(cfg)
+
+
+def test_live_mode_refuses_a_real_money_account(config):
+    norm = norm_for(config, "LIVE", True)
+    assert norm.require_demo is True, "the guard should default to on"
+    with pytest.raises(cs.ConfigError) as e:
+        cs.check_account(norm, is_live_account=True)
+    assert "REAL" in str(e.value)
+
+
+def test_live_mode_accepts_a_demo_account(config):
+    cs.check_account(norm_for(config, "LIVE", True), is_live_account=False)
+
+
+def test_the_guard_can_be_turned_off_on_purpose(config):
+    norm = norm_for(config, "LIVE", True, require_demo=False)
+    cs.check_account(norm, is_live_account=True)
+
+
+@pytest.mark.parametrize("mode,enabled", [
+    ("PAPER", False),
+    ("BACKTEST", False),
+    ("LIVE", False),      # LIVE without the second switch degrades to PAPER
+])
+def test_a_mode_that_sends_nothing_does_not_care_which_account(config, mode, enabled):
+    """No order leaves, so the account is irrelevant and must not block startup."""
+    cs.check_account(norm_for(config, mode, enabled), is_live_account=True)
+
+
+@pytest.mark.parametrize("trade_mode,expected", [
+    (0, False),    # DEMO
+    (1, False),    # CONTEST
+    (2, True),     # REAL
+])
+def test_the_connector_reports_the_account_type(conn, market, trade_mode, expected):
+    market.trade_mode = trade_mode
+    assert conn.is_live_account() is expected
+
+
+def test_an_unreadable_account_is_treated_as_live(conn, market):
+    """
+    Fails closed. The mistake that costs money is calling a real account a
+    demo, so anything unreadable counts as real.
+    """
+    market.account_info_none = True
+    assert conn.is_live_account() is True
+
+
+def test_an_account_with_no_trade_mode_is_treated_as_live(conn):
+    class Bare:
+        login = 1
+    assert conn._is_live(Bare()) is True

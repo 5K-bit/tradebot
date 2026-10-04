@@ -128,15 +128,34 @@ class MT5Connector:
         self._selected.clear()
 
         if not quiet:
-            # trade_mode: 0=DEMO, 1=CONTEST, 2=REAL (ACCOUNT_TRADE_MODE_* enum).
-            # Only REAL is "(LIVE)" — everything else is treated as non-live.
-            is_live = acct.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL
+            is_live = self._is_live(acct)
             print(
                 f"[mt5] connected: login={acct.login} "
                 f"server={getattr(acct, 'server', self.server) or '?'} "
                 f"balance={acct.balance} {acct.currency} "
                 f"{'(LIVE)' if is_live else '(DEMO)'}"
             )
+
+    @staticmethod
+    def _is_live(acct) -> bool:
+        """
+        trade_mode: 0=DEMO, 1=CONTEST, 2=REAL (the ACCOUNT_TRADE_MODE_* enum).
+        Only REAL is real money; everything else is treated as non-live.
+
+        Fails closed. An account whose type cannot be read is reported as live,
+        because the mistake that costs money is calling a real account a demo.
+        """
+        mode = getattr(acct, "trade_mode", None)
+        if mode is None:
+            return True
+        return mode == mt5.ACCOUNT_TRADE_MODE_REAL
+
+    def is_live_account(self) -> bool:
+        """Whether the attached account trades real money. Fails closed."""
+        acct = mt5.account_info()
+        if acct is None:
+            return True
+        return self._is_live(acct)
 
     def server_utc_offset_hours(self, symbol: str | None = None) -> float | None:
         """

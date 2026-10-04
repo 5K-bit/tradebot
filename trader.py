@@ -419,6 +419,10 @@ def main():
     conn = MT5Connector()
     conn.connect()
 
+    # Which account the bot reaches depends on the terminal, not on this config,
+    # so it can only be checked once connected. Before anything is sent.
+    schema.check_account(norm, conn.is_live_account())
+
     bot = Lathe(cfg, conn, state, norm=norm)
     poll_seconds = norm.poll_seconds
 
