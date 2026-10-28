@@ -82,6 +82,7 @@ class Market:
         self.series = {}          # timeframe -> list of closed prices
         self.ohlc = {}            # timeframe -> a full rates array
         self.deals = {}           # ticket -> realised profit
+        self.order_history = []
         self.pending = []         # working orders
         self.symbol_names = ["EURUSD", "USDJPY", "GBPUSD", "XAUUSD"]
         self.filling_mask = 2     # 1=FOK, 2=IOC
@@ -217,6 +218,10 @@ def orders_get(symbol=None, **kwargs):
     return tuple(o for o in MARKET.pending if symbol is None or o.symbol == symbol)
 
 
+def history_orders_get(*args, ticket=None, **kwargs):
+    return tuple(o for o in MARKET.order_history if ticket is None or o.ticket == ticket)
+
+
 def history_deals_get(position=None, **kwargs):
     profit = MARKET.deals.get(int(position)) if position is not None else None
     if profit is None:
@@ -231,6 +236,8 @@ def order_send(request):
         MARKET.next_ticket += 1
         MARKET.pending.append(Obj(
             ticket=MARKET.next_ticket, symbol=request["symbol"], volume=request["volume"],
+            volume_initial=request["volume"], volume_current=request["volume"],
+            state=1, position_id=0, comment=request.get("comment", ""),
             type=request["type"], magic=request.get("magic", 0),
             price_open=request["price"], sl=request.get("sl", 0.0),
             tp=request.get("tp", 0.0), expiration=request.get("expiration", 0)))
@@ -239,6 +246,10 @@ def order_send(request):
                    deal=0, comment="pending placed")
 
     if request.get("action") == TRADE_ACTION_REMOVE:
+        for o in MARKET.pending:
+            if o.ticket == request["order"]:
+                o.state = 2
+                MARKET.order_history.append(o)
         MARKET.pending = [o for o in MARKET.pending if o.ticket != request["order"]]
         return Obj(retcode=TRADE_RETCODE_DONE, price=0.0, volume=0.0,
                    order=request["order"], deal=0, comment="removed")
@@ -261,8 +272,11 @@ def order_send(request):
         MARKET.next_ticket += 1
         MARKET.positions.append(Obj(
             ticket=MARKET.next_ticket, symbol=request["symbol"], volume=request["volume"],
+            volume_initial=request["volume"], volume_current=request["volume"],
+            state=1, position_id=0, comment=request.get("comment", ""),
             type=request["type"], magic=request.get("magic", 0), profit=0.0,
             price_open=fill, sl=request.get("sl", 0.0), tp=request.get("tp", 0.0),
         ))
     return Obj(retcode=TRADE_RETCODE_DONE, price=fill, volume=request["volume"],
                order=MARKET.next_ticket, deal=MARKET.next_ticket, comment="done")
+

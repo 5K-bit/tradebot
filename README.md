@@ -355,3 +355,28 @@ account, give each a different `MAGIC`.
   exceed what you'd expect from the % risked per trade if slippage or
   gaps occur.
 
+
+
+## Whetstone trade journal (Phase 1)
+
+Lathe now persists linked signal/trade IDs and reconciles broker fills and exits
+into `trade_closed.jsonl`, with signed net costs and explicit unresolved outcomes.
+PAPER signals are not fabricated into completed trades. See
+[the record contract, recovery behavior, and demo acceptance steps](docs/whetstone-phase1.md)
+before using the journal on an existing state file.
+
+## Whetstone reviewer
+
+Whetstone is now available as a separate read-only package in `whetstone/`.
+It calculates trade statistics, creates Markdown reports, replays historical
+bid/ask ticks, searches a bounded set of single-rule changes, and checks
+registered backtest/demo evidence. It uses no LLM or model API and never edits
+Lathe or places broker orders.
+
+Try a clearly labeled synthetic example without credentials:
+
+```powershell
+python -m whetstone demo --out whetstone-reports/demo
+```
+
+See [Whetstone's commands and validation boundaries](whetstone/README.md).

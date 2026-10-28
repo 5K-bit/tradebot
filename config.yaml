@@ -619,3 +619,9 @@ safety:
 #                         DO NOT TRADE
 #
 # ============================================================
+
+
+# Whetstone Phase 1: atomic current view, one row per trade_id.
+journal:
+  path: "../vault/output/trade_closed.jsonl"
+  reconcile_seconds: 60

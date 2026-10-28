@@ -90,6 +90,8 @@ class Protection:
         self._equity_peak = self._get("equity_peak", None)
         self._spreads = list(self._get("spread_history", []) or [])
         self._spreads_since_save = 0
+        self._opened_events = set(self._get("opened_trade_events", []))
+        self._closed_events = set(self._get("closed_trade_events", []))
         self._account_halted = bool(self._get("account_halted", False))
 
         if self._account_halted:
@@ -104,6 +106,8 @@ class Protection:
         if self.state is None:
             return
         self.state.set(
+            opened_trade_events=sorted(self._opened_events),
+            closed_trade_events=sorted(self._closed_events),
             consecutive_losses=self._consecutive_losses,
             cooldown_session=self._cooldown_session,
             cooldown_until=self._cooldown_until,
@@ -208,7 +212,11 @@ class Protection:
                 print(f"[protect] ACCOUNT KILL SWITCH: drawdown {drawdown:.2%} from peak "
                       f"{self._equity_peak:.2f} >= limit {self.cfg.account_drawdown_pct:.2%}.")
 
-    def record_trade_opened(self, session_key: str) -> None:
+    def record_trade_opened(self, session_key: str, event_id: str | None = None) -> None:
+        if event_id is not None:
+            if event_id in self._opened_events:
+                return
+            self._opened_events.add(event_id)
         self._session_trades[session_key] = self._session_trades.get(session_key, 0) + 1
         # Keep the map small; only the current session matters.
         if len(self._session_trades) > 10:
@@ -217,8 +225,12 @@ class Protection:
         self._persist()
 
     def record_trade_closed(self, profit: float, session_key: str | None,
-                            now: datetime | None = None) -> None:
-        """A win resets the streak; a loss may start a cooldown."""
+                            now: datetime | None = None, event_id: str | None = None) -> None:
+        """A win resets the streak; an event ID makes journal replay idempotent."""
+        if event_id is not None:
+            if event_id in self._closed_events:
+                return
+            self._closed_events.add(event_id)
         if profit < 0:
             self._consecutive_losses += 1
         else:
@@ -341,3 +353,4 @@ def from_config(cfg: dict) -> ProtectionConfig:
         news_blackout_minutes_before=p.get("news_blackout_minutes_before", 30),
         news_blackout_minutes_after=p.get("news_blackout_minutes_after", 30),
     )
+
