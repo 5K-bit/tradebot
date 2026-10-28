@@ -368,9 +368,10 @@ before using the journal on an existing state file.
 ## Whetstone reviewer
 
 Whetstone is now available as a separate read-only package in `whetstone/`.
-It calculates trade statistics, creates Markdown reports, prepares or sends
-aggregate statistics to Claude, validates single-rule proposals, and checks
-registered backtest/demo evidence. It never edits Lathe or places trades.
+It calculates trade statistics, creates Markdown reports, replays historical
+bid/ask ticks, searches a bounded set of single-rule changes, and checks
+registered backtest/demo evidence. It uses no LLM or model API and never edits
+Lathe or places broker orders.
 
 Try a clearly labeled synthetic example without credentials:
 
