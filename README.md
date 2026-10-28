@@ -364,3 +364,18 @@ into `trade_closed.jsonl`, with signed net costs and explicit unresolved outcome
 PAPER signals are not fabricated into completed trades. See
 [the record contract, recovery behavior, and demo acceptance steps](docs/whetstone-phase1.md)
 before using the journal on an existing state file.
+
+## Whetstone reviewer
+
+Whetstone is now available as a separate read-only package in `whetstone/`.
+It calculates trade statistics, creates Markdown reports, prepares or sends
+aggregate statistics to Claude, validates single-rule proposals, and checks
+registered backtest/demo evidence. It never edits Lathe or places trades.
+
+Try a clearly labeled synthetic example without credentials:
+
+```powershell
+python -m whetstone demo --out whetstone-reports/demo
+```
+
+See [Whetstone's commands and validation boundaries](whetstone/README.md).
