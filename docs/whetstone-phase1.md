@@ -1,7 +1,7 @@
 # Whetstone Phase 1: trade outcomes
 
-Lathe remains a deterministic executor. This change adds the data foundation;
-it does not implement Whetstone statistics, AI proposals, or rule changes.
+Lathe remains a deterministic executor. This component supplies the data foundation. The separate `whetstone/` package
+provides numerical review and historical research without an LLM.
 
 ## Verified PAPER behavior
 
