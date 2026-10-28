@@ -32,6 +32,7 @@ import MetaTrader5 as mt5
 import yaml
 
 import config_schema as schema
+from branding import print_banner
 import indicators
 import protection as protection_mod
 import regime as regime_mod
@@ -415,6 +416,8 @@ def main():
     cfg = load_config()
     norm = validate_config(cfg)
 
+    print_banner("TRADER / " + schema.describe_mode(norm))
+
     state = JsonState(norm.state_path)
     conn = MT5Connector()
     conn.connect()
@@ -494,3 +497,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
