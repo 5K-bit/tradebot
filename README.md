@@ -1,4 +1,29 @@
-# Lathe — Forex Trader Module
+<div align="center">
+
+<img src="assets/brand/github-banner.svg" alt="LATHE — Forex trading engine. Observe. Evaluate. Execute. A Blackfong project." width="1200">
+
+**Session-aware Forex trading. Scored signals. Explicit risk gates.**
+
+[![Tests](https://img.shields.io/github/actions/workflow/status/5K-bit/tradebot/tests.yml?branch=master&style=for-the-badge&label=tests&labelColor=0c1220&color=f2c66d)](https://github.com/5K-bit/tradebot/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10%2B-f2c66d?style=for-the-badge&logo=python&logoColor=white&labelColor=0c1220)
+![Platform](https://img.shields.io/badge/platform-MetaTrader_5-99a7bc?style=for-the-badge&labelColor=0c1220)
+![Default mode](https://img.shields.io/badge/default_mode-PAPER-f2c66d?style=for-the-badge&labelColor=0c1220)
+
+[Setup](#setup) · [Run](#run) · [MT5 connection](#connecting-to-mt5) · [Strategy](#the-pipeline) · [Protection](#protection) · [Tests](#tests)
+
+</div>
+
+---
+
+## Overview
+
+LATHE is the Forex trading engine in the **Blackfong** project family.
+It evaluates session conditions, scores candidate signals, and applies
+protection gates before an order can proceed.
+
+| Observe | Evaluate | Execute |
+|---|---|---|
+| Session window, H1 regime, M15 setups and M5 triggers | Six setup patterns, signal scoring and reward/risk checks | Risk sizing, guarded MT5 orders and decision logs |
 
 Implements LATHE ADAPTIVE SESSION STRATEGY v1 — six setups, a six-category
 signal score, and a protection layer — against an MT5 account.
