@@ -1,190 +1,256 @@
-# Whetstone v0.1
+# Whetstone v0.2: numerical strategy research
 
-**Lathe trades. Whetstone reads the outcomes and prepares evidence for better
-rules.** Whetstone never places an order, modifies Lathe, or approves a change.
+Lathe executes. Whetstone reviews records, replays historical quotes, and tests
+small rule changes. **No LLM, tokens, model server, network analysis call, or
+streamed language response is required.** Every report uses calculated values
+and fixed text. No Whetstone command changes Lathe or sends a broker order.
 
-Whetstone is a separate Python package housed in this repository for a shared
-record contract. It imports no Lathe modules and needs no MT5 installation.
-Python 3.10+ and the standard library are enough. Tests use pytest.
+## Components
 
-## What is implemented
-
-| Component | Behavior |
+| Command | Purpose |
 |---|---|
-| Reviewer | Reads the Phase 1 JSONL snapshot; rejects unresolved, malformed, inconsistent, and conflicting records |
-| Statistics | Win rate, 95% Wilson interval, average net P&L per trade (expectancy), total net P&L, closed-trade drawdown |
-| Breakdowns | Pair, recorded session, setup, fill spread, and signal spread |
-| Report | Markdown report, structured statistics, and a Claude-ready prompt for any interval or UTC week |
-| Claude layer | Optional direct API call, or offline prompt/response import; aggregate statistics only |
-| Proposals | One scalar rule change, hypothesis, rationale, falsification condition, supported subgroup, and source report ID |
-| Validation gate | Registered holdout/forward windows, version/criteria checks, exported backtest/demo evidence checks, rollback reference |
-| Authority | Every proposal requires human review and approval; no command applies it |
+| `review` | Statistics and Markdown reports from completed trade records |
+| `replay` | Historical bid/ask tick execution using Lathe's pure strategy modules |
+| `research` | Bounded one-rule training search followed by a later screening period |
+| `plan` | Register a fixed proposal, unseen holdout/forward windows, and criteria |
+| `replay-plan` | Run the registered holdout baseline/candidate, without searching it |
+| `validate` | Check holdout and actual demo-forward evidence; retain human approval |
+| `import-proposals` | Validate a human-authored hypothesis against report statistics |
+| `demo` | Generate an explicitly synthetic statistics example |
 
-## Try it without credentials or trade data
-
-Run from this repository's root:
+Whetstone is a separate package in this repo. Reporting and evidence checks use
+Python 3.10+ standard-library code. Historical replay reuses Lathe's NumPy-based
+indicators and requires the replay dependencies. Neither needs MetaTrader5.
 
 ```powershell
-python -m whetstone demo --out whetstone-reports/demo
+python -m pip install -r whetstone/requirements-replay.txt
+python -m whetstone --help
+```
+
+## Start with a smoke test
+
+```powershell
+python -m whetstone replay --ticks whetstone/examples/ticks.synthetic.csv --config config.yaml --assumptions whetstone/examples/assumptions.synthetic.json --start 2026-01-15T03:30:00Z --end 2026-01-15T03:31:00Z --out whetstone-reports/replay-smoke
 python -m pytest -q
 ```
 
-Open `whetstone-reports/demo/report.md`. The 140 example trades are **synthetic**,
-not Lathe results. Synthetic summaries cannot register a real validation plan.
-A rendered Markdown example is also in [the example report](../docs/whetstone-demo.md).
+The four synthetic ticks intentionally yield **zero trades**: there is no
+indicator warmup. This verifies wiring without fabricating performance. For a
+report-layout demonstration with synthetic closed trades:
 
-## Review Lathe records
+```powershell
+python -m whetstone demo --out whetstone-reports/demo
+```
+
+[The report example](../docs/whetstone-demo.md) contains synthetic results only.
+
+## 1. Supply historical market data and costs
+
+Replay consumes a chronological, interleaved CSV of quotes for every configured
+symbol. It does not download prices, contact MT5, or infer bid/ask from candles.
+
+```csv
+timestamp,symbol,bid,ask,quote_to_account_rate
+2026-01-15T03:30:00+00:00,EURUSD,1.10000,1.10010,1.0
+```
+
+- `timestamp`: timezone-aware quote time; rows must be nondecreasing.
+- `bid`/`ask`: positive observed prices with ask >= bid.
+- `quote_to_account_rate`: units of account currency per unit of quote currency,
+  at that timestamp. This is required for P&L conversion and historical sizing.
+  EURUSD on a USD account uses 1; other pairs need a sourced conversion policy.
+- Include pre-window history for indicators. At least 60 complete H1 bars are
+  required by the default configuration; provide enough for the full 400-bar
+  buffers when matching live indicator history. The first partial bar is discarded.
+- Missing ticks remain gaps; no synthetic intermediate quotes are invented.
+  Missing symbols are flagged and disqualify a run from candidate selection.
+  Presence of a symbol alone does not prove the dataset is complete.
+
+Use the broker/feed you intend to validate against, and preserve its provenance
+and timezone conversion. Verify completeness outside the program. Avoid mixing
+feeds without documenting the change. Data quality remains an acceptance task.
+
+Create an assumptions JSON based on the example, replacing every illustrative
+value with your own evidence. Set `data_origin: historical_ticks` only for real
+historical input. Declare account currency, starting balance, fixed historical
+broker UTC offset, contract sizes, volume limits/steps, commission and fees per
+lot **per side**, and adverse slippage in price units. Commission/fee inputs are
+nonnegative charges; replay writes them as negative P&L components.
+
+The historical broker offset must agree with any explicit Lathe configuration.
+Split studies at broker offset changes; this version does not infer historical
+DST from the current terminal. Account conversion and slippage are execution
+assumptions, not evidence of actual historical fills.
+
+Swaps are explicit signed per-lot account-currency events:
+
+```json
+{
+  "timestamp": "2026-01-15T22:00:00+00:00",
+  "symbol": "EURUSD",
+  "long_per_lot": -2.0,
+  "short_per_lot": 0.5
+}
+```
+
+Place these inside `swaps` and declare `swap_policy: explicit_events`. An empty
+list explicitly assumes no swap charges; Whetstone does not guess rollover
+calendars, triple swaps, fees, or news events. Enter historical news blackout
+windows in the research copy of Lathe's config. Never overwrite the running
+configuration when preparing an experiment.
+
+## 2. Establish a baseline replay
+
+```powershell
+python -m whetstone replay --ticks data/ticks.csv --config config.yaml --assumptions data/assumptions.json --start 2026-07-01T00:00:00Z --end 2026-09-01T00:00:00Z --out whetstone-reports/baseline
+```
+
+Outputs `replay.json` and simulated `trade_closed.jsonl`. Closed outcomes are
+compatible with `review`. Historical records carry `execution_mode: paper`,
+`data_origin: historical_replay`, `simulated: true`, and no fabricated broker
+IDs. This replay simulator is separate from Lathe's existing PAPER/BACKTEST
+modes, which still do not simulate completed positions.
+
+Replay imports the actual configuration mapping, indicators, regime classifier,
+setup detectors, scorer, session logic, protection rules, risk sizing, and stop
+management functions. It **does not import the live trader or broker connector**.
+Pure-module sharing is not proof of full live-engine parity; compare decisions
+and fills against broker demo logs before trusting results.
+
+Execution conventions:
+
+- Bid bars aggregate on UTC boundaries. Only completed bars enter decisions.
+- Management and signal polling use available ticks at the configured poll
+  interval; broker-side pending fills/stops/targets inspect every recorded tick.
+- A new pending order can fill only on a subsequent quote. Buys enter at ask,
+  sells at bid, with declared adverse slippage. Gaps use the observed quote.
+- Long stops/targets use bid; short stops/targets use ask. Stops receive adverse
+  slippage; targets fill at their stated limit with no favorable improvement.
+- Only one concurrent position/order is supported. Fills are full-volume;
+  partial fills, liquidity, broker rejects, and network latency are not modeled.
+- Currency conversion uses the supplied tick rate. Account risk uses simulated
+  equity and a historical clock, never the computer's current date.
+- An open position at the interval end is retained with marked P&L. It is not
+  force-closed at a future price or silently dropped. Such runs cannot win a search.
+- Pending orders at the boundary are reported; they have incurred no fill costs.
+
+Results record data, config, cost-assumption, strategy-source, and replay-source
+hashes. Tick-sampled equity drawdown and closed-trade drawdown are both reported;
+neither can capture price moves absent from the input feed.
+
+## 3. Search one rule on training data
+
+```powershell
+python -m whetstone research --ticks data/ticks.csv --config config.yaml --assumptions data/assumptions.json --rule spread.max_spread_pips --values "[1.0,1.5]" --train-start 2026-07-01T00:00:00Z --train-end 2026-09-01T00:00:00Z --screen-start 2026-09-01T00:00:00Z --screen-end 2026-10-01T00:00:00Z --out whetstone-reports/spread-research
+```
+
+Dates and values illustrate the command shape, not a recommendation for your
+broker. Supported rules are deliberately limited:
+
+- `spread.max_spread_pips`: tighten the existing ceiling only.
+- `scoring.execution_threshold`: raise the existing threshold only, up to 100.
+
+There are at most eight declared candidates and one changed scalar rule. Risk
+limits are not search variables. Every candidate and baseline replays identical
+data/cost assumptions. The original config stays untouched.
+
+Training selects the highest positive net expectancy that improves baseline
+without worsening either closed-trade or tick-sampled equity drawdown. Each arm
+must have at least 30 completed trades (or a larger configured minimum), no open
+boundary exposure, and no flagged missing symbols. This threshold is a screening
+rule, not statistical proof. All trial results are retained in `research.json`.
+
+Only the selected candidate and baseline then run on the later screening window.
+Failure rejects that candidate; Whetstone does not try alternatives against the
+same screen. One chronological split is **not** a complete walk-forward study.
+Repeatedly trying new searches against the same period will still overfit it.
+
+Outputs: `research.json`, `research.md`, and `proposals.json`. A proposal is
+emitted only after training and screening criteria pass on nonsynthetic input.
+Synthetic experiments never produce an actionable proposal. Every inspected
+period, including screening, becomes discovery data; it cannot be reused as
+unseen holdout in a subsequent validation plan.
+
+## 4. Register and run untouched holdout
+
+Use the `proposal_id` from `proposals.json`:
+
+```powershell
+python -m whetstone plan --proposals whetstone-reports/spread-research/proposals.json --proposal-id PROPOSAL_ID --holdout-start HOLDOUT_START_ISO --holdout-end HOLDOUT_END_ISO --forward-start FORWARD_START_ISO --forward-end FORWARD_END_ISO --max-drawdown DRAWDOWN_LIMIT --minimum-trades 30 --out whetstone-reports/validation-plan
+```
+
+Replace placeholders with explicit timezone-aware dates and a monetary drawdown
+limit. All windows must be ordered and disjoint; forward testing starts after
+plan registration. Preserve the plan before inspecting results. Hashes are not
+signed evidence of preregistration, so human review still verifies that claim.
+
+For research-generated plans, run the registered holdout without another search:
+
+```powershell
+python -m whetstone replay-plan --ticks data/reserved-ticks.csv --config config.yaml --assumptions data/assumptions.json --plan whetstone-reports/validation-plan/validation_plan.json --candidate-version CANDIDATE_RELEASE_SHA_OR_TAG --out whetstone-reports/holdout
+```
+
+This refuses a baseline source/config different from the one registered by
+research, applies only the fixed rule change in memory, and emits
+`holdout_export.json`. It refuses incomplete/open-exposure runs. Candidate release
+name is supplied by the operator: verify the actual release's code and config
+against recorded hashes before using that same release for demo-forward testing.
+A version label by itself is not proof of matching code.
+
+## 5. Demo forward test and human approval
+
+Run the reviewed candidate release on a dedicated demo account. The journal must
+record actual fills (`live` execution + `demo` account). Simulation/PAPER cannot
+satisfy the forward gate. Build a forward export with the plan ID, exact plan
+window/change, candidate version, dataset identifier, data SHA-256, engine/version
+provenance, and a `candidate` array of complete Phase 1 journal records.
+
+```powershell
+python -m whetstone validate --plan whetstone-reports/validation-plan/validation_plan.json --holdout whetstone-reports/holdout/holdout_export.json --forward demo-export.json --out whetstone-reports/validation-result
+```
+
+The gate requires sufficient trades, matching windows/versions/currency, intact
+monetary accounting, improved holdout expectancy without worsened closed-trade
+drawdown, the registered drawdown limit, and positive demo-forward expectancy.
+It checks supplied evidence; independent verification of broker records,
+unseen-data selection, execution assumptions, and the exact one-rule code/config
+diff remains human work. Additional registered time splits and sensitivity to
+cost assumptions are necessary before relying on a pattern.
+
+Exit 2 means evidence blocked, exit 1 means an input/error condition, and exit 0
+means evidence checks passed **pending human review**. No command approves or
+deploys a change. The plan retains the baseline as its rollback reference.
+
+## Review-only reports
 
 ```powershell
 python -m whetstone review --input ../vault/output/trade_closed.jsonl --week 2026-10-19 --out whetstone-reports/2026-10-19
 ```
 
-`--week` must be a Monday and defines a UTC week with an exclusive end. For
-another interval, use explicit timezone-aware boundaries instead:
+`--week` defines a UTC Monday-to-Monday interval, end excluded. Alternatively use
+`--start` and `--end` with explicit offsets. The source snapshot is never changed.
+Reports are generated on demand; no automatic scheduled task is installed.
 
-```powershell
-python -m whetstone review --input ../vault/output/trade_closed.jsonl --start 2026-10-01T00:00:00-04:00 --end 2026-10-28T00:00:00-04:00 --out whetstone-reports/october
-```
+Win rate includes break-even trades in its denominator. Expectancy is mean net
+P&L per trade in account currency. Cohorts separate execution mode, account type,
+currency, strategy version, and data origin. Keep separate inputs per account.
+Pair/session/setup groups each show their own sample count. Session means the
+recorded session key (currently a date), not an inferred regional market session.
 
-Outputs:
+Report drawdown uses cumulative **closed-trade** P&L from zero, aggregating
+simultaneous closes. It differs from replay's tick-sampled equity drawdown.
+Wilson win-rate intervals assume independent trials; clustered trades and
+multiple comparisons limit interpretation. A 30-trade sample is not proof.
 
-- `report.md`: readable review and interpretation limits.
-- `summary.json`: aggregate metrics, group counts, exclusions, and source/report hashes.
-- `claude_prompt.txt`: instructions plus aggregate statistics; no raw trades or broker IDs.
+Spread groups use per-symbol quantiles in price units. Fill and signal spreads
+remain distinct; unknown fill spread cannot support a threshold proposal.
+Late journal reconciliation can revise previous reports; source hashes expose
+such changes. Re-run the interval to refresh its snapshot.
 
-The source JSONL is read once and never modified. Reports use the latest
-snapshot; late reconciliation can change an earlier week's results. The source
-fingerprint exposes that change. Re-run the desired interval to refresh it.
-These commands generate weekly reports on demand; no scheduled task is installed.
+## Current acceptance status
 
-Execution mode, demo/real account type, currency, strategy version, and synthetic
-origin define separate cohorts. Results are not pooled across these boundaries.
-Keep separate input files for separate accounts, as Phase 1 requires. A journal
-row does not itself prove an authentic broker execution.
-
-Break-even trades remain in the win-rate denominator. Expectancy is in account
-currency per trade, not R or a percentage. Drawdown is the peak-to-trough drop in
-cumulative **closed-trade** net P&L, starting at zero; it does not measure floating
-losses, account equity, deposits, or risk-adjusted returns. Simultaneous closes
-are summed before drawdown calculation.
-
-The default minimum sample is 30 and cannot be reduced. It is an initial review
-threshold, never proof of a stable edge. Every subgroup has its own count.
-Wilson intervals assume independence; clustered trades and repeated subgroup
-searches limit their interpretation. Session grouping uses Lathe's recorded
-session key (currently a date), not inferred London/Asian/New York labels.
-
-Spread buckets use per-symbol quantiles within the selected window, in price
-units. Ties may leave an empty bucket. Fill spread never falls back to signal
-spread; missing values are reported as unknown and cannot support a proposal.
-Signal spread is measured when the pending order was submitted, not filled.
-Quantile comparisons are descriptive, not evidence that a threshold will work.
-
-## Claude, with or without an API connection
-
-Manual path: give Claude `claude_prompt.txt`, save its JSON reply as
-`claude-response.json`, then validate/import it:
-
-```powershell
-python -m whetstone import-proposals --summary whetstone-reports/october/summary.json --response claude-response.json --out whetstone-reports/october-proposals
-```
-
-API path: set `ANTHROPIC_API_KEY` in your own environment or secrets manager, and
-provide a model ID available to your account. Some keys also require
-`ANTHROPIC_WORKSPACE_ID`. Do not put keys into a committed file or report.
-
-```powershell
-python -m whetstone analyze --summary whetstone-reports/october/summary.json --model YOUR_CLAUDE_MODEL_ID --out whetstone-reports/october-proposals
-```
-
-Only `analyze` makes a network request. It sends aggregates to Anthropic's
-Messages API, not raw trade/deal IDs, broker account numbers, or local paths.
-Financial aggregate statistics still leave your machine when you run it.
-Malformed/truncated replies and proposals referencing undersized or unknown
-subgroups are rejected. Empty proposal arrays are valid. The API adapter is
-covered with a mocked transport; a live Claude request has not been run here.
-
-## Register a validation plan before testing
-
-Choose one `proposal_id` from `proposals.json`. Register immutable windows and a
-monetary drawdown limit appropriate to that cohort. Example placeholders below
-must be replaced with your selected proposal and testing dates:
-
-```powershell
-python -m whetstone plan --proposals whetstone-reports/october-proposals/proposals.json --proposal-id PROPOSAL_ID --holdout-start HOLDOUT_START_ISO --holdout-end HOLDOUT_END_ISO --forward-start FORWARD_START_ISO --forward-end FORWARD_END_ISO --max-drawdown DRAWDOWN_LIMIT --minimum-trades 30 --out whetstone-reports/validation-plan
-```
-
-Discovery, holdout, and forward windows must be disjoint and ordered. Forward
-testing must begin after registration. Preserve the plan file and its hash in
-version control before looking at results. Hashes detect edits relative to their
-stored values; they are not signed proof that someone never rewrote a plan.
-Human review must verify genuine preregistration and unseen holdout data.
-
-The gate requires:
-
-- At least the registered number of trades in each holdout arm and forward arm.
-- One declared rule change and the same candidate version in both stages.
-- A matching baseline version and account currency.
-- Improved holdout expectancy without worsened closed-trade drawdown.
-- All arms within the registered monetary drawdown limit.
-- Positive forward expectancy from actual demo executions (`live` + `demo`).
-- Finished testing windows, distinct stages, no cross-stage reused trade IDs,
-  no unresolved or synthetic rows, and intact monetary accounting.
-
-A changed strategy can trade fewer times, so baseline/candidate counts need not
-match. Both arms must be replayed over the same holdout dataset. This gate checks
-export structure and declared provenance; it cannot independently prove that a
-replay engine honored its source data or made only one code change.
-
-## Backtest and forward export contract
-
-**Whetstone does not contain a market replay/backtest engine.** Lathe's existing
-BACKTEST mode is not one either. Run a genuine replay engine on reserved market
-data, then supply its baseline and candidate trade outcomes. Do not pass a
-filtered subset of old trades off as a new strategy backtest. An unimplemented
-replay engine is a remaining system dependency, not a completed validation.
-
-Each export is a JSON object:
-
-```json
-{
-  "plan_id": "EXACT_PLAN_ID",
-  "window": {"start": "EXACT_REGISTERED_START", "end": "EXACT_REGISTERED_END"},
-  "candidate_version": "candidate-git-sha-or-tag",
-  "change": {"rule": "spread.max_spread_pips", "from": 2.0, "to": 1.5},
-  "dataset_id": "reserved-market-data-identifier",
-  "data_sha256": "64-lowercase-hex-characters",
-  "engine_version": "replay-engine-version",
-  "baseline": [],
-  "candidate": []
-}
-```
-
-Replace arrays with complete schema-v1 trade records, including currency,
-strategy version, timestamps, context, costs, and net P&L. The forward export
-needs `candidate` only, with actual demo fills; PAPER cannot satisfy this gate
-because Lathe does not simulate completed paper trades. Every trade must open
-and close inside its registered window. The export's baseline version is checked
-on every baseline row; candidate version is checked on every candidate row.
-
-```powershell
-python -m whetstone validate --plan whetstone-reports/validation-plan/validation_plan.json --holdout holdout-export.json --forward demo-export.json --out whetstone-reports/validation-result
-```
-
-Exit 2 means blocked evidence, exit 1 means an input/error condition, and exit 0
-means the evidence checks passed **pending human review**. The output always
-requires human approval. Review the full baseline/candidate code diff, data
-provenance, broker costs, window selection, and rollback version yourself before
-approving any change to Lathe. Whetstone has no deployment or rule-editing path.
-
-## Acceptance still required
-
-The automated tests and synthetic demonstration verify software behavior. They
-do not establish trading performance. Remaining acceptance work is a broker
-reconciliation check on Windows/MT5 demo, an actual Claude request if that path
-is desired, and genuine unseen-data replay plus demo-forward evidence for each
-proposal. None of those results are fabricated by the demo command.
-
-API documentation used for the optional adapter:
-https://platform.claude.com/docs/en/manage-claude/authentication
-https://platform.claude.com/docs/en/api/versioning
+Automated tests and synthetic cases verify software behavior, not profitability.
+No historical broker dataset or cost schedule has been evaluated in this session.
+The next operational dependency is your historical bid/ask export, conversions,
+and broker costs, followed by decision/fill comparison against Windows/MT5 demo.
+There is no model connection left to configure.
