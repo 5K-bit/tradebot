@@ -8,7 +8,7 @@ import pytest
 
 from whetstone import core
 from whetstone.__main__ import demo_rows, main
-from whetstone.analysis import call_claude, prompt, proposals
+from whetstone.analysis import verify_summary, proposals
 from whetstone.validation import make_plan, check_evidence
 
 START, END = '2026-01-05T00:00:00+00:00', '2026-01-12T00:00:00+00:00'
@@ -108,13 +108,6 @@ def test_net_pnl_mismatch_excluded(source):
     assert summary(source)['excluded']['net_pnl_mismatch'] == 1
 
 
-def test_prompt_contains_aggregates_not_raw_ids(source):
-    text=prompt(summary(source))
-    assert 'synthetic-signal-1' not in text and 'synthetic-139' not in text
-    assert 'trade_id' not in text and str(source) not in text
-    assert 'minimum_sample' in text
-
-
 def test_proposals_enforce_sample_and_single_change(source):
     s=summary(source); bundle=proposals(response(),s)
     assert bundle['automatic_changes_allowed'] is False
@@ -127,30 +120,7 @@ def test_proposals_enforce_sample_and_single_change(source):
 
 def test_tampered_summary_rejected(source):
     s=summary(source); s['included_trades']=999
-    with pytest.raises(core.DataError): prompt(s)
-
-
-def test_claude_request_mocked_and_no_key_echo(source,monkeypatch):
-    monkeypatch.setenv('ANTHROPIC_API_KEY','test-secret')
-    s=summary(source)
-    def transport(req,timeout):
-        assert req.full_url == 'https://api.anthropic.com/v1/messages'
-        assert req.headers['Authorization'] == 'Bearer test-secret'
-        body=json.loads(req.data)
-        assert body['model']=='explicit-test-model'
-        assert 'synthetic-signal-1' not in body['messages'][0]['content']
-        return io.BytesIO(json.dumps({'stop_reason':'end_turn','content':[{'type':'text','text':json.dumps(response())}]}).encode())
-    result=call_claude(s,'explicit-test-model',transport)
-    assert result['model']=='explicit-test-model'
-    assert 'test-secret' not in json.dumps(result)
-
-
-def test_claude_missing_key_and_truncation_fail_closed(source,monkeypatch):
-    monkeypatch.delenv('ANTHROPIC_API_KEY',raising=False)
-    with pytest.raises(core.DataError,match='missing'): call_claude(summary(source),'test')
-    monkeypatch.setenv('ANTHROPIC_API_KEY','test')
-    with pytest.raises(core.DataError,match='incomplete'):
-        call_claude(summary(source),'test',lambda *a,**k:io.BytesIO(b'{"stop_reason":"max_tokens"}'))
+    with pytest.raises(core.DataError): verify_summary(s)
 
 
 def make_test_plan(source):
@@ -218,7 +188,7 @@ def test_cli_review_preserves_input_and_outputs_report(source,tmp_path):
     before=source.read_bytes(); out=tmp_path/'report'
     assert main(['review','--input',str(source),'--week','2026-01-05','--out',str(out)])==0
     assert source.read_bytes()==before
-    assert (out/'report.md').exists() and (out/'claude_prompt.txt').exists()
+    assert (out/'report.md').exists() and not (out/'claude_prompt.txt').exists()
     assert 'synthetic' in (out/'report.md').read_text()
 
 
