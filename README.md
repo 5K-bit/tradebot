@@ -120,6 +120,17 @@ HOLD, not a BUY.
 
 ## Run
 
+LATHE displays a Blackfong terminal banner at trader and preflight startup,
+with a gold wordmark and the effective trading mode or preflight context.
+Preview the branding without connecting to MT5:
+
+```bash
+python3 branding.py
+```
+
+Use `NO_COLOR=1` to disable color. Narrow terminals use a compact heading;
+redirected output stays plain text. See [BRANDING.md](BRANDING.md).
+
 ```bash
 python3 trader.py
 ```
@@ -318,3 +329,4 @@ account, give each a different `MAGIC`.
   pointing this at a funded live account; leverage means losses can
   exceed what you'd expect from the % risked per trade if slippage or
   gaps occur.
+

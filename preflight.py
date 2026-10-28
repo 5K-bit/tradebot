@@ -23,6 +23,7 @@ suite against a fake terminal cannot:
 It finishes by printing the config values to set.
 """
 import sys
+from branding import print_banner
 from datetime import datetime, timezone
 
 try:
@@ -422,6 +423,7 @@ def summary(resolved, details, offset):
 
 
 def main():
+    print_banner("PREFLIGHT / checks only / no orders sent")
     if not connect():
         return 2
     resolved, details, offset = {}, {}, 0
@@ -460,3 +462,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
