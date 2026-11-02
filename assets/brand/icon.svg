@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="t">
+  <title id="t">LATHE icon</title>
+  <rect width="256" height="256" rx="56" fill="#0c1220"/>
+  <rect x="6" y="6" width="244" height="244" rx="50" fill="none" stroke="#f2c66d" stroke-opacity=".35" stroke-width="4"/>
+  <g transform="translate(37.39 37.39) scale(0.7551)" fill="none" stroke="#f2c66d" stroke-width="13.24" stroke-linecap="round" stroke-linejoin="round">
+<circle cx="120" cy="120" r="97" stroke-opacity=".16"/>
+<path d="M22 174V88h24v86M46 131h148m0-43v86h24V88M34 190h172"/>
+<path d="M78 78v79m42-114v113m42-88v89"/>
+<rect x="68" y="98" width="20" height="35" rx="2" fill="#0c1220"/>
+<rect x="110" y="67" width="20" height="59" rx="2" fill="#f2c66d"/>
+<rect x="152" y="86" width="20" height="37" rx="2" fill="#0c1220"/>
+</g>
+</svg>

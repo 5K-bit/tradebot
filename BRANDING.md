@@ -32,3 +32,7 @@ No terminal clearing, animation, extra dependency, or shell profile change.
 - Keep the SVG self-contained, accessible and free of scripts, external fonts or images.
 - Describe implemented behavior. Do not imply profitability, live validation or unimplemented AI capabilities.
 - Keep PAPER defaults, operating limits and setup documentation visible below the introduction.
+
+## Icon
+
+Square app/avatar icon built from the banner symbol and accent: `assets/brand/icon.svg` (256 × 256 source) with `icon-512.png` and `icon-192.png` exports. Use it for GitHub avatars, social tiles, favicons and install icons. Regenerate it from the banner symbol if the symbol or accent changes.
