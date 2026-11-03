@@ -355,3 +355,21 @@ account, give each a different `MAGIC`.
   exceed what you'd expect from the % risked per trade if slippage or
   gaps occur.
 
+
+## Not financial advice
+
+This software places real orders with real money if you point it at a live account. It is provided as is, with no warranty, and nothing here is financial or investment advice. Trading leveraged products can lose more than you deposit. Run it on a demo account first and read the safety notes above.
+
+## History check
+
+The full git history (every branch and every committed file version) was scanned for keys, tokens, private keys and embedded passwords on 2026-11-02; none were found. Broker credentials are read from environment variables (`MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`) and are never stored in the repository. This is a pattern scan, not a guarantee: if you fork this, keep your own credentials out of commits.
+
+## Licence
+
+Apache-2.0. See [LICENSE](LICENSE).
+
+## AI assistance
+
+AI tools assist with implementation, debugging, tests, and documentation.
+
+Louis Boddie owns project direction and acceptance decisions; linked tests and release evidence document what has been verified.
