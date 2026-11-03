@@ -379,7 +379,9 @@ class MT5Connector:
         result = mt5.order_send(request)
         if result is None:
             raise RuntimeError(f"pending_stop_order({symbol}) returned None: {mt5.last_error()}")
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
+        if result.retcode not in (10008, mt5.TRADE_RETCODE_DONE, 10010):
+            # PLACED / DONE / DONE_PARTIAL are acknowledgements, not proof
+            # of a fill. The journal obtains fills from deal history.
             raise RuntimeError(f"pending order failed: retcode={result.retcode} "
                                f"comment={result.comment}")
         return result
@@ -480,3 +482,4 @@ class MT5Connector:
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             raise RuntimeError(f"close order_send failed: retcode={result.retcode} comment={result.comment}")
         return result
+

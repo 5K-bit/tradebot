@@ -1,0 +1,4 @@
+# Historical replay only; reports/validation use Python's standard library.
+numpy>=1.26
+PyYAML>=6.0
+tzdata>=2024.1

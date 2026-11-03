@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "data_origin": "synthetic",
+  "account_currency": "USD",
+  "starting_balance": 10000.0,
+  "broker_utc_offset_hours": 0,
+  "swap_policy": "explicit_events",
+  "swaps": [],
+  "symbols": {
+    "EURUSD": {
+      "contract_size": 100000,
+      "volume_min": 0.01,
+      "volume_step": 0.01,
+      "volume_max": 100,
+      "commission_per_lot_side": 3.5,
+      "fee_per_lot_side": 0.0,
+      "slippage_price": 0.00001
+    },
+    "USDJPY": {
+      "contract_size": 100000,
+      "volume_min": 0.01,
+      "volume_step": 0.01,
+      "volume_max": 100,
+      "commission_per_lot_side": 3.5,
+      "fee_per_lot_side": 0.0,
+      "slippage_price": 0.001
+    }
+  }
+}

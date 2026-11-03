@@ -10,3 +10,7 @@ __pycache__/
 # Account number and server, remembered by run.ps1. Per-machine, and
 # nobody else needs it. The password is never written here.
 account.local.txt
+
+
+# Local Whetstone reports may contain private financial statistics.
+whetstone-reports/

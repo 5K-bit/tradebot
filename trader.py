@@ -14,11 +14,6 @@ reason for rejections, not only for fills.
 Open positions are managed every poll rather than every setup bar, so the
 break-even and trailing steps react on M5 timing rather than M15.
 
-NOTE: the bot cannot currently open a trade. setups.py and scoring.py are
-fail-closed stubs — the strategy document names the three setups and states the
-score threshold, but defines neither the setup rules nor the score formula. Both
-refuse rather than guess. Everything around them is live and tested.
-
 Run with:  python3 trader.py
 Stop with: Ctrl+C (does NOT auto-close open positions — see README)
 """
@@ -43,6 +38,7 @@ import trade_management as tm
 from mt5_connector import MT5Connector
 from risk_manager import RiskManager
 from state import JsonState
+from journal import TradeJournal, identity
 
 TIMEFRAME_MAP = {
     "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,
@@ -195,12 +191,26 @@ class Lathe:
         self.bar_cursor = {str(k): int(v) for k, v in (state.get("last_bar_time") or {}).items()}
         self.trade_meta = dict(state.get("trade_meta") or {})
         self._atr_history: dict = {}
+        journal_cfg = cfg.get("journal", {})
+        self.journal = TradeJournal(state, journal_cfg.get("path") or
+                                    str(Path(self.vault).with_name("trade_closed.jsonl")), self.vault)
+        self.reconcile_seconds = float(journal_cfg.get("reconcile_seconds", 60))
+        if self.reconcile_seconds <= 0:
+            raise ValueError("journal.reconcile_seconds must be positive")
+        self._last_reconcile = None
+        self._journal_ready = False
+        # Legacy entries have no reliable mode/account provenance. Do not
+        # manufacture records from them or permit new entries until reviewed.
+        self._legacy_metadata = any("trade_id" not in m for m in self.trade_meta.values())
 
     # --- open position management -----------------------------------------
     def manage_open_positions(self, now: datetime) -> None:
         """Step stops to break-even and then trail them. Runs every poll."""
         for pos in self.conn.open_positions():
-            meta = self.trade_meta.get(str(pos.ticket))
+            meta = self.journal.metadata(pos)
+            legacy = self.trade_meta.get(str(pos.ticket))
+            if meta is None and legacy and "trade_id" not in legacy:
+                meta = legacy
             if not meta:
                 continue        # opened before this process knew about it
             try:
@@ -218,34 +228,39 @@ class Lathe:
                 continue
             try:
                 self.conn.modify_stop(pos, new_stop)
+                if not self.conn.dry_run:
+                    self.journal.stop_changed(getattr(pos, "identifier", pos.ticket),
+                                              new_stop, reason, now)
                 log_decision(self.vault, pos.symbol, "STOP-MOVED", reason,
                              ticket=pos.ticket, new_sl=round(new_stop, 5))
             except RuntimeError as e:
                 log_decision(self.vault, pos.symbol, "STOP-MOVE-FAILED", str(e),
                              ticket=pos.ticket)
 
-    def reconcile_closed_trades(self, session_key: str | None) -> None:
-        """Positions we were tracking that no longer exist have been closed."""
-        live = {str(p.ticket) for p in self.conn.open_positions()}
-        for ticket in list(self.trade_meta):
-            if ticket in live:
-                continue
-            meta = self.trade_meta.pop(ticket)
-            profit = self._closed_profit(ticket)
-            self.protection.record_trade_closed(profit, meta.get("session_key") or session_key)
-            log_decision(self.vault, meta.get("symbol", "?"), "CLOSED",
-                         "position no longer open", ticket=ticket, profit=profit)
+    def reconcile_closed_trades(self, session_key: str | None, now=None) -> None:
+        now = now or datetime.now(timezone.utc)
+        if self._last_reconcile is not None and (now - self._last_reconcile).total_seconds() < self.reconcile_seconds:
+            return
+        self._journal_ready = False
+        self.journal.reconcile(mt5, now)
+        for tid, t in self.journal.trades.items():
+            if t["record"]["broker_ids"]["orders"] or t["status"] == "paper_signal":
+                self.protection.record_trade_opened(t["record"]["context"].get("session"), event_id=tid)
+        # Protection persists the event ID with the loss counters so replay
+        # after a crash cannot apply the same outcome twice.
+        closed = sorted((t for t in self.journal.trades.values() if t["status"] == "closed"),
+                        key=lambda t: t["record"]["closed_at"])
+        for t in closed:
+            r = t["record"]
+            self.protection.record_trade_closed(r["net_pnl"],
+                r["context"].get("session") or session_key, now=now, event_id=r["trade_id"])
+        finished = {tid for tid, t in self.journal.trades.items()
+                    if t["status"] in ("closed", "cancelled", "paper_signal")}
+        self.trade_meta = {k: m for k, m in self.trade_meta.items()
+                           if m.get("trade_id") not in finished}
         self.state.set(trade_meta=self.trade_meta)
-
-    def _closed_profit(self, ticket: str) -> float:
-        """Realised profit for a ticket, from the broker's deal history."""
-        try:
-            deals = mt5.history_deals_get(position=int(ticket))
-        except Exception:
-            return 0.0
-        if not deals:
-            return 0.0
-        return float(sum(getattr(d, "profit", 0.0) for d in deals))
+        self._last_reconcile = now
+        self._journal_ready = True
 
     # --- per-symbol evaluation --------------------------------------------
     def expire_stale_orders(self, now: datetime) -> None:
@@ -262,6 +277,14 @@ class Lathe:
                     log_decision(self.vault, order.symbol, "CANCEL-FAILED", str(e))
 
     def evaluate(self, symbol: str, session_key: str, account, now: datetime) -> None:
+        if self._legacy_metadata:
+            log_decision(self.vault, symbol, "HOLD", "legacy trade metadata needs reconciliation review")
+            return
+        if not self._journal_ready:
+            self.reconcile_closed_trades(session_key, now)
+        if self.journal.blocked():
+            log_decision(self.vault, symbol, "HOLD", "unresolved trade history or submission")
+            return
         m15_all = self.conn.get_candles(symbol, self.tf_setup, count=CANDLE_COUNT)
         if len(m15_all) < 2:
             return
@@ -371,11 +394,23 @@ class Lathe:
             volume_max=limits.volume_max,
         )
         expires_at = int(now.timestamp() + candidate.expiry_bars * self.entry_bar_seconds)
+        self.state.set(last_bar_time=self.bar_cursor)
+        trade_id, signal_id = self.journal.begin(
+            signal, identity(mt5), "paper" if self.conn.dry_run else "live",
+            {"spread_at_entry": None, "spread_at_signal": spread,
+             "spread_unit": "price", "session": session_key, "atr": atr_m15,
+             "atr_timeframe": "M15", "setup": candidate.setup, "regime": current.state},
+            candidate.stop_price, now)
+        signal.update(trade_id=trade_id, signal_id=signal_id,
+                      execution_mode="paper" if self.conn.dry_run else "live")
         result = self.conn.pending_stop_order(
             symbol, lots, candidate.direction, candidate.entry_price,
-            candidate.stop_price, candidate.target_price, expires_at=expires_at)
+            candidate.stop_price, candidate.target_price, expires_at=expires_at,
+            comment=self.journal.trades[trade_id]["comment"])
+        self.journal.submitted(trade_id, result)
 
         self.trade_meta[str(result.order)] = {
+            "trade_id": trade_id,
             "symbol": symbol,
             "entry": candidate.entry_price,
             "original_stop": candidate.stop_price,
@@ -383,7 +418,7 @@ class Lathe:
             "setup": candidate.setup,
         }
         self.state.set(trade_meta=self.trade_meta)
-        self.protection.record_trade_opened(session_key)
+        self.protection.record_trade_opened(session_key, event_id=trade_id)
 
         signal["ticket"] = result.order
         signal["lots"] = lots
@@ -463,9 +498,12 @@ def main():
                     log_to_vault(bot.vault, f"Session {'OPEN ' + session_key if session_key else 'CLOSED'}")
                     was_open = session_key
 
+                try:
+                    bot.reconcile_closed_trades(session_key, now)
+                except RuntimeError as e:
+                    log_to_vault(bot.vault, f"RECONCILIATION BLOCKED: {e}")
                 bot.manage_open_positions(now)
                 bot.expire_stale_orders(now)
-                bot.reconcile_closed_trades(session_key)
 
                 if bot.risk.check_kill_switch(account.equity) or session_key is None:
                     time.sleep(poll_seconds)
@@ -497,4 +535,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
